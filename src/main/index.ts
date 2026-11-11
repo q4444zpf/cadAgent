@@ -132,6 +132,10 @@ function createWindow(): BrowserWindow {
     void window.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
+  window.webContents.on('render-process-gone', (_event, details) => {
+    console.log(`RENDER_GONE reason=${details.reason} exit=${details.exitCode}`)
+  })
+
   return window
 }
 
@@ -869,14 +873,24 @@ async function runSmoke(window: BrowserWindow): Promise<void> {
       }
 
       if (process.env.SMOKE_LAYER_LOAD === '1') {
+        const heartbeat = setInterval(async () => {
+          const body = await readBody(window).catch((error) => `ERR:${String(error)}`)
+          console.log(
+            `SMOKE_HEARTBEAT crashed=${window.webContents.isCrashed()} len=${body.length} tail=${body.slice(-200).replace(/\s+/g, ' ')}`
+          )
+        }, 10_000)
         try {
           await waitForBody(window, '图层已加载完成', Date.now() + 180_000)
+          console.log('SMOKE_STEP body-complete')
           await waitForCondition(
             async () => (await countInkPixels(window)) > 0,
             '渐进加载完成后画布未绘制图形'
           )
+          console.log('SMOKE_STEP ink-ok')
           await verifyLayerToggle(window, 30_000)
+          console.log('SMOKE_STEP toggle-ok')
           await verifyWheelZoom(window)
+          console.log('SMOKE_STEP wheel-ok')
           if (shotPath) {
             window.webContents.invalidate()
             await new Promise((resolve) => setTimeout(resolve, 500))
@@ -892,6 +906,8 @@ async function runSmoke(window: BrowserWindow): Promise<void> {
           await sidecar.stop()
           app.exit(1)
           return
+        } finally {
+          clearInterval(heartbeat)
         }
       }
 
@@ -916,7 +932,27 @@ async function runSmoke(window: BrowserWindow): Promise<void> {
 }
 
 async function readBody(window: BrowserWindow): Promise<string> {
-  return window.webContents.executeJavaScript('document.body.innerText').catch(() => '')
+  return withTimeout(
+    window.webContents.executeJavaScript('document.body.innerText'),
+    5_000,
+    '读取页面文本超时'
+  ).catch(() => '')
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error) => {
+        clearTimeout(timer)
+        reject(error)
+      }
+    )
+  })
 }
 
 async function waitForBody(window: BrowserWindow, needle: string, deadline: number): Promise<void> {
@@ -959,7 +995,8 @@ async function clickButtonByText(window: BrowserWindow, text: string): Promise<v
 }
 
 async function countInkPixels(window: BrowserWindow): Promise<number> {
-  return (await window.webContents.executeJavaScript(`(() => {
+  return withTimeout(
+    window.webContents.executeJavaScript(`(() => {
     const canvas = document.querySelector('.drawing-canvas');
     if (!canvas) return -1;
     const context = canvas.getContext('2d');
@@ -969,7 +1006,10 @@ async function countInkPixels(window: BrowserWindow): Promise<number> {
       if (data[index] + data[index + 1] + data[index + 2] > 120) count += 1;
     }
     return count;
-  })()`)) as number
+  })()`),
+    15_000,
+    '读取画布像素超时（渲染进程无响应）'
+  ) as Promise<number>
 }
 
 async function waitForCondition(
