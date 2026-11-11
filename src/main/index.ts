@@ -1841,17 +1841,23 @@ async function countAmberPixels(window: BrowserWindow): Promise<number> {
 
 async function captureShot(window: BrowserWindow, shotPath: string): Promise<void> {
   await mkdir(dirname(shotPath), { recursive: true })
-  let image: Electron.NativeImage | null = null
-  for (let attempt = 0; attempt < 3 && !image; attempt += 1) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      image = await window.webContents.capturePage()
+      // capturePage can stall forever on a heavy composited canvas; screenshots are
+      // evidence only, so timebox them instead of hanging the whole smoke run.
+      const image = await withTimeout(window.webContents.capturePage(), 20_000, '截图超时')
+      await writeFile(shotPath, image.toPNG())
+      return
     } catch (error) {
-      if (attempt === 2) throw error
+      if (attempt === 1) {
+        console.error(
+          `SMOKE_SHOT_FAIL ${error instanceof Error ? error.message : String(error)}`
+        )
+        return
+      }
       await new Promise((resolve) => setTimeout(resolve, 300))
     }
   }
-  if (!image) throw new Error('截图失败')
-  await writeFile(shotPath, image.toPNG())
 }
 
 app.whenReady().then(async () => {
