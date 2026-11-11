@@ -34,7 +34,12 @@ const fixtures = [
   { dxf: 'samples/fixtures/block.dxf', expect: 'BLOCK', shot: 'out/smoke-block.png' },
   { dxf: 'samples/fixtures/dim.dxf', expect: 'DIM', shot: 'out/smoke-dim.png' },
   { dxf: 'samples/fixtures/broken.dxf', expect: '无法打开图纸', shot: 'out/smoke-broken.png' },
-  { dxf: 'samples/fixtures/placeholder.dwg', expect: 'DWG 需先转换', shot: 'out/smoke-dwg.png' },
+  {
+    dxf: 'samples/fixtures/placeholder.dwg',
+    expect: 'DWG 需先转换',
+    shot: 'out/smoke-dwg.png',
+    odaMissing: true
+  },
   {
     dxf: oversizeFixture,
     expect: '大图纸摘要',
@@ -55,7 +60,8 @@ for (const fixture of fixtures) {
       '--shot',
       fixture.shot,
       ...(fixture.layers ? ['--layers'] : []),
-      ...(fixture.layerLoad ? ['--layer-load'] : [])
+      ...(fixture.layerLoad ? ['--layer-load'] : []),
+      ...(fixture.odaMissing ? ['--oda-missing'] : [])
     ],
     { cwd: root, stdio: 'inherit' }
   )

@@ -4,6 +4,7 @@ import {
   type ConverterStatus,
   type Drawing,
   type DrawingOpenResult,
+  type DrawingPhaseEvent,
   type HistorySessionView,
   type SidecarStatus
 } from '../../shared/protocol'
@@ -40,6 +41,11 @@ export default function App() {
   const [historySignal, setHistorySignal] = useState(0)
   const [converter, setConverter] = useState<ConverterStatus | null>(null)
   const [converterDismissed, setConverterDismissed] = useState(false)
+  const [phase, setPhase] = useState<DrawingPhaseEvent | null>(null)
+
+  useEffect(() => {
+    return window.cad.drawing.onPhase(setPhase)
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -88,6 +94,7 @@ export default function App() {
 
   async function loadPath(path: string): Promise<void> {
     setOpening(true)
+    setPhase(null)
     try {
       applyResult(await window.cad.drawing.load(path))
     } catch (failure) {
@@ -97,6 +104,7 @@ export default function App() {
       })
     } finally {
       setOpening(false)
+      setPhase(null)
     }
   }
 
@@ -108,6 +116,7 @@ export default function App() {
         return
       }
       setOpening(true)
+      setPhase(null)
       try {
         const result = await window.cad.drawing.load(auto.path)
         if (mounted) {
@@ -123,6 +132,7 @@ export default function App() {
       } finally {
         if (mounted) {
           setOpening(false)
+          setPhase(null)
         }
       }
     })()
@@ -147,6 +157,7 @@ export default function App() {
 
   async function openFile(): Promise<void> {
     setOpening(true)
+    setPhase(null)
     try {
       const result = await window.cad.drawing.open()
       if (result) {
@@ -159,6 +170,7 @@ export default function App() {
       })
     } finally {
       setOpening(false)
+      setPhase(null)
     }
   }
 
@@ -253,7 +265,11 @@ export default function App() {
               onClick={openFile}
               disabled={opening}
             >
-              {opening ? '正在导入…' : '打开图纸…'}
+              {opening
+                ? phase
+                  ? '正在转换 DWG…'
+                  : '正在导入…'
+                : '打开图纸…'}
             </button>
           ) : null}
         </div>
@@ -427,30 +443,34 @@ export default function App() {
             </div>
           </div>
 
+          {opening ? (
+            <p className="muted" role="status">
+              {phase
+                ? `正在转换 DWG：${phase.name}（首次可能需要数十秒）…`
+                : '正在导入图纸…'}
+            </p>
+          ) : null}
+
           {error ? (
             <div className="error error--block">
               <strong>
-                {error.code === 'dwg_requires_conversion' ? 'DWG 需先转换' : '无法打开图纸'}
+                {error.code === 'dwg_conversion_failed'
+                  ? 'DWG 转换失败'
+                  : error.code === 'dwg_requires_conversion'
+                    ? 'DWG 需先转换'
+                    : '无法打开图纸'}
               </strong>
               <p>{error.message}</p>
               {error.code === 'dwg_requires_conversion' ? (
-                converter && !converter.found ? (
-                  <>
-                    <p className="muted">
-                      安装 ODA File Converter 后，用它将 DWG 另存为 DXF，再通过“打开图纸…”导入。转换问题不影响
-                      DXF 的读图与生成。
-                    </p>
-                    <button type="button" onClick={() => setView('settings')}>
-                      查看安装指引
-                    </button>
-                  </>
-                ) : (
+                <>
                   <p className="muted">
-                    {converter?.found
-                      ? `已检测到 ODA File Converter${converter.version ? ` ${converter.version}` : ''}，用它将 DWG 另存为 DXF 后再导入。`
-                      : '用 ODA File Converter 将 DWG 另存为 DXF 后再导入。'}
+                    未检测到 ODA File Converter，无法自动转换 DWG。安装后即可直接导入 DWG，应用会自动转换为
+                    DXF。转换问题不影响 DXF 的读图与生成。
                   </p>
-                )
+                  <button type="button" onClick={() => setView('settings')}>
+                    查看安装指引
+                  </button>
+                </>
               ) : null}
             </div>
           ) : null}
@@ -475,8 +495,16 @@ export default function App() {
             )
           ) : (
             <div className="preview-empty">
-              <p>导入 DXF 后在此显示预览与图层。</p>
-              <p className="muted">DWG 文件需先经 ODA File Converter 转换为 DXF。</p>
+              <p>
+                {converter?.found
+                  ? '导入 DXF 或 DWG 后在此显示预览与图层。'
+                  : '导入 DXF 后在此显示预览与图层。'}
+              </p>
+              <p className="muted">
+                {converter?.found
+                  ? 'DWG 会自动转换为 DXF 后导入（首次转换可能需要数十秒）。'
+                  : 'DWG 文件需先经 ODA File Converter 转换为 DXF。'}
+              </p>
             </div>
           )}
         </section>

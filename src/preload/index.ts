@@ -15,6 +15,7 @@ import type {
   DiagnosticsActionOutcome,
   DiagnosticsLogOutcome,
   DrawingOpenResult,
+  DrawingPhaseEvent,
   HistoryActionOutcome,
   HistoryCreate,
   HistoryListOutcome,
@@ -52,7 +53,16 @@ contextBridge.exposeInMainWorld('cad', {
     load: (path: string): Promise<DrawingOpenResult> => ipcRenderer.invoke('drawing:load', path),
     layer: (path: string, layer: string): Promise<LayerEntitiesResult> =>
       ipcRenderer.invoke('drawing:layer', { path, layer }),
-    autoOpen: (): Promise<{ path: string } | null> => ipcRenderer.invoke('drawing:auto-open')
+    autoOpen: (): Promise<{ path: string } | null> => ipcRenderer.invoke('drawing:auto-open'),
+    onPhase: (callback: (event: DrawingPhaseEvent) => void): (() => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: DrawingPhaseEvent): void => {
+        callback(payload)
+      }
+      ipcRenderer.on('drawing:phase', listener)
+      return () => {
+        ipcRenderer.removeListener('drawing:phase', listener)
+      }
+    }
   },
   settings: {
     get: (): Promise<PublicModelSettings> => ipcRenderer.invoke('settings:get'),

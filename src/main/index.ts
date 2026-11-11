@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from 'electron'
 import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, extname, join, resolve } from 'node:path'
+import { basename, dirname, extname, join, resolve } from 'node:path'
 import { QaAgent } from '../node/agent/qa-agent'
 import { KbAgent } from '../node/agent/kb-agent'
 import { DesignAgent } from '../node/design/agent'
@@ -11,6 +11,7 @@ import {
   summaryCacheKey,
   writeSummaryCache
 } from '../node/drawing/summary-cache'
+import { convertDwgToDxf } from '../node/dwg/convert'
 import { HistoryStore } from '../node/history/store'
 import { AppLogger } from '../node/logging/logger'
 import { VisionRecognizer } from '../node/kb/vision'
@@ -70,6 +71,7 @@ const logger = new AppLogger({
   filePath: join(app.getPath('userData'), 'logs', 'app.log')
 })
 const summaryCacheDir = join(app.getPath('userData'), 'drawing-cache')
+const dwgCacheDir = join(app.getPath('userData'), 'dwg-cache')
 const settingsStore = new SettingsStore({
   filePath: join(app.getPath('userData'), 'settings.json'),
   codec: {
@@ -215,56 +217,93 @@ async function checkSidecarHealth(): Promise<void> {
   }
 }
 
+function getConverterStatus(): ConverterStatus {
+  if (isSmoke && process.env.SMOKE_ODA_MISSING === '1') {
+    return { found: false, path: null }
+  }
+  return detectOdaConverter()
+}
+
+function broadcastDrawingPhase(name: string): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('drawing:phase', { phase: 'converting', name })
+  }
+}
+
 async function loadDrawing(filePath: string): Promise<DrawingOpenResult> {
   const extension = extname(filePath).toLowerCase()
+  let dxfPath = filePath
+  let displayName: string | null = null
 
   if (extension === '.dwg') {
-    return {
-      ok: false,
-      error: {
-        code: 'dwg_requires_conversion',
-        message: 'DWG 文件需先经 ODA File Converter 转换为 DXF 后再导入'
+    const converter = getConverterStatus()
+    if (!converter.found || !converter.path) {
+      return {
+        ok: false,
+        error: {
+          code: 'dwg_requires_conversion',
+          message: '未检测到 ODA File Converter，无法自动转换 DWG；安装后可自动转换导入'
+        }
       }
     }
-  }
-
-  if (extension !== '.dxf') {
+    const name = basename(filePath)
+    broadcastDrawingPhase(name)
+    const started = Date.now()
+    try {
+      dxfPath = await convertDwgToDxf(filePath, {
+        converterPath: converter.path,
+        cacheDir: dwgCacheDir
+      })
+      displayName = name
+      logger.write('info', 'convert', 'DWG 转换完成', {
+        path: filePath,
+        ms: Date.now() - started
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      logger.write('error', 'convert', 'DWG 转换失败', { path: filePath, message })
+      return { ok: false, error: { code: 'dwg_conversion_failed', message } }
+    }
+  } else if (extension !== '.dxf') {
     return {
       ok: false,
       error: { code: 'unsupported_format', message: `不支持的文件格式：${extension || '未知'}` }
     }
   }
 
-  const fileInfo = await stat(filePath).catch(() => null)
+  const fileInfo = await stat(dxfPath).catch(() => null)
   const oversize = fileInfo !== null && isDrawingOversize(fileInfo.size)
 
   try {
     await sidecar.start()
-    if (currentDrawing && resolve(currentDrawing.path) !== resolve(filePath)) {
+    if (currentDrawing && resolve(currentDrawing.path) !== resolve(dxfPath)) {
       await sidecar.closeDrawing()
     }
     let drawing: Drawing
     if (fileInfo && oversize) {
       const cacheKey = summaryCacheKey({
-        path: resolve(filePath),
+        path: resolve(dxfPath),
         size: fileInfo.size,
         mtimeMs: fileInfo.mtimeMs
       })
       logger.write('info', 'parse', '图纸超过 50 MB，按摘要模式解析', {
-        path: filePath,
+        path: dxfPath,
         sizeMb: Math.round(fileInfo.size / (1024 * 1024))
       })
       const cached = await readSummaryCache(summaryCacheDir, cacheKey)
       if (cached) {
-        logger.write('info', 'parse', '命中大图纸摘要缓存', { path: filePath })
+        logger.write('info', 'parse', '命中大图纸摘要缓存', { path: dxfPath })
         drawing = cached
       } else {
-        drawing = await sidecar.openDrawing(filePath)
+        drawing = await sidecar.openDrawing(dxfPath)
         await writeSummaryCache(summaryCacheDir, cacheKey, drawing)
-        logger.write('info', 'parse', '大图纸摘要解析完成', { path: filePath })
+        logger.write('info', 'parse', '大图纸摘要解析完成', { path: dxfPath })
       }
     } else {
-      drawing = await sidecar.parseDrawing(filePath)
+      drawing = await sidecar.parseDrawing(dxfPath)
+    }
+    if (displayName) {
+      drawing = { ...drawing, name: displayName }
     }
     currentDrawing = drawing
     if (currentSessionId) {
@@ -273,7 +312,7 @@ async function loadDrawing(filePath: string): Promise<DrawingOpenResult> {
     return { ok: true, drawing }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    logger.write('error', 'parse', '图纸解析失败', { path: filePath, message })
+    logger.write('error', 'parse', '图纸解析失败', { path: dxfPath, message })
     return {
       ok: false,
       error: {
@@ -328,12 +367,7 @@ function registerIpc(): void {
       return { ok: false, path: folder, error: errorText(error) }
     }
   })
-  ipcMain.handle('converter:status', (): ConverterStatus => {
-    if (isSmoke && process.env.SMOKE_ODA_MISSING === '1') {
-      return { found: false, path: null }
-    }
-    return detectOdaConverter()
-  })
+  ipcMain.handle('converter:status', (): ConverterStatus => getConverterStatus())
   ipcMain.handle('converter:open-download', async (): Promise<ConverterActionOutcome> => {
     try {
       await shell.openExternal(ODA_DOWNLOAD_URL)
@@ -715,8 +749,10 @@ function broadcastAgentEvent(event: AgentStreamEvent): void {
 async function runSmoke(window: BrowserWindow): Promise<void> {
   const smokeDxf = process.env.SMOKE_DXF
   const smokeInfo = smokeDxf ? await stat(smokeDxf).catch(() => null) : null
+  const isDwg = smokeDxf ? extname(smokeDxf).toLowerCase() === '.dwg' : false
   const deadline =
-    Date.now() + (smokeInfo && isDrawingOversize(smokeInfo.size) ? 180_000 : 30_000)
+    Date.now() +
+    (isDwg || (smokeInfo && isDrawingOversize(smokeInfo.size)) ? 180_000 : 30_000)
   const expected = process.env.SMOKE_EXPECT
   const shotPath = process.env.SMOKE_SHOT
   const settingsMode = process.env.SMOKE_SETTINGS === '1'

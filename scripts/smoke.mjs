@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync, statSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { extname, resolve } from 'node:path'
 import electron from 'electron'
 
 const MB = 1024 * 1024
@@ -17,8 +17,14 @@ function takeOption(name) {
 }
 
 const dxf = takeOption('--dxf')
-const TIMEOUT_MS =
-  dxf && existsSync(dxf) && statSync(dxf).size > 50 * MB ? 240_000 : 60_000
+const timeoutOption = takeOption('--timeout')
+const autoTimeoutMs =
+  dxf &&
+  existsSync(dxf) &&
+  (extname(dxf).toLowerCase() === '.dwg' || statSync(dxf).size > 50 * MB)
+    ? 300_000
+    : 60_000
+const TIMEOUT_MS = timeoutOption ? Number(timeoutOption) : autoTimeoutMs
 const expect = takeOption('--expect')
 const shot = takeOption('--shot')
 const settingsMode = args.includes('--settings')
@@ -31,6 +37,7 @@ const kbQaMode = args.includes('--kb-qa')
 const designMode = args.includes('--design')
 const recoveryMode = args.includes('--recovery')
 const odaMode = args.includes('--oda')
+const odaMissingMode = args.includes('--oda-missing')
 const historyMode = takeOption('--history')
 const userData = takeOption('--user-data')
 const kbDir = takeOption('--kb-dir')
@@ -51,6 +58,7 @@ const env = {
   ...(designMode ? { SMOKE_DESIGN: '1' } : {}),
   ...(recoveryMode ? { SMOKE_RECOVERY: '1' } : {}),
   ...(odaMode ? { SMOKE_ODA: '1', SMOKE_ODA_MISSING: '1' } : {}),
+  ...(odaMissingMode ? { SMOKE_ODA_MISSING: '1' } : {}),
   ...(historyMode ? { SMOKE_HISTORY: historyMode } : {}),
   ...(userData ? { SMOKE_USER_DATA: resolve(userData) } : {}),
   ...(kbDir ? { SMOKE_KB_DIR: resolve(kbDir) } : {})

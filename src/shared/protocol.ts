@@ -139,6 +139,11 @@ export const DrawingOpenResultSchema = z.discriminatedUnion('ok', [
 
 export type DrawingOpenResult = z.infer<typeof DrawingOpenResultSchema>
 
+export interface DrawingPhaseEvent {
+  phase: 'converting'
+  name: string
+}
+
 export const LayerEntitiesRequestSchema = z.object({
   path: z.string().min(1),
   layer: z.string().min(1)

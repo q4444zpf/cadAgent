@@ -16,6 +16,7 @@ import type {
   DiagnosticsActionOutcome,
   DiagnosticsLogOutcome,
   DrawingOpenResult,
+  DrawingPhaseEvent,
   HistoryActionOutcome,
   HistoryCreate,
   HistoryListOutcome,
@@ -47,6 +48,7 @@ declare global {
         load: (path: string) => Promise<DrawingOpenResult>
         layer: (path: string, layer: string) => Promise<LayerEntitiesResult>
         autoOpen: () => Promise<{ path: string } | null>
+        onPhase: (callback: (event: DrawingPhaseEvent) => void) => () => void
       }
       settings: {
         get: () => Promise<PublicModelSettings>
