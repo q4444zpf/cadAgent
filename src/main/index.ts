@@ -25,6 +25,7 @@ import {
   DesignPromptSchema,
   HistoryCreateSchema,
   HistoryIdSchema,
+  LayerEntitiesRequestSchema,
   ModelSettingsSaveSchema,
   type AgentAskResult,
   type AgentStreamEvent,
@@ -46,6 +47,7 @@ import {
   type KbListOutcome,
   type KbRebuildOutcome,
   type KbSearchOutcome,
+  type LayerEntitiesResult,
   type SettingsSaveResult,
   type SidecarStatus
 } from '../shared/protocol'
@@ -234,6 +236,9 @@ async function loadDrawing(filePath: string): Promise<DrawingOpenResult> {
 
   try {
     await sidecar.start()
+    if (currentDrawing && resolve(currentDrawing.path) !== resolve(filePath)) {
+      await sidecar.closeDrawing()
+    }
     let drawing: Drawing
     if (fileInfo && oversize) {
       const cacheKey = summaryCacheKey({
@@ -250,7 +255,7 @@ async function loadDrawing(filePath: string): Promise<DrawingOpenResult> {
         logger.write('info', 'parse', '命中大图纸摘要缓存', { path: filePath })
         drawing = cached
       } else {
-        drawing = await sidecar.parseDrawingSummary(filePath)
+        drawing = await sidecar.openDrawing(filePath)
         await writeSummaryCache(summaryCacheDir, cacheKey, drawing)
         logger.write('info', 'parse', '大图纸摘要解析完成', { path: filePath })
       }
@@ -357,6 +362,37 @@ function registerIpc(): void {
     const smokePath = process.env.SMOKE_DXF
     return smokePath ? { path: resolve(smokePath) } : null
   })
+  ipcMain.handle(
+    'drawing:layer',
+    async (_event, input: unknown): Promise<LayerEntitiesResult> => {
+      const parsed = LayerEntitiesRequestSchema.safeParse(input)
+      if (!parsed.success) {
+        return { ok: false, entities: [], error: '图层请求无效' }
+      }
+      const { path: filePath, layer } = parsed.data
+      if (!currentDrawing || resolve(filePath) !== currentDrawing.path) {
+        return { ok: false, entities: [], error: '图纸已切换，请重新加载' }
+      }
+      try {
+        await sidecar.start()
+        const started = Date.now()
+        const entities = await sidecar.layerEntities(filePath, layer)
+        logger.write('info', 'parse', '图层加载完成', {
+          layer,
+          entities: entities.length,
+          ms: Date.now() - started
+        })
+        return { ok: true, entities }
+      } catch (error) {
+        logger.write('error', 'parse', '图层加载失败', {
+          path: filePath,
+          layer,
+          message: errorText(error)
+        })
+        return { ok: false, entities: [], error: errorText(error) }
+      }
+    }
+  )
   ipcMain.handle('settings:get', () => settingsStore.getPublic())
   ipcMain.handle('settings:save', async (_event, input: unknown): Promise<SettingsSaveResult> => {
     const parsed = ModelSettingsSaveSchema.safeParse(input)
@@ -832,6 +868,33 @@ async function runSmoke(window: BrowserWindow): Promise<void> {
         }
       }
 
+      if (process.env.SMOKE_LAYER_LOAD === '1') {
+        try {
+          await waitForBody(window, '图层已加载完成', Date.now() + 180_000)
+          await waitForCondition(
+            async () => (await countInkPixels(window)) > 0,
+            '渐进加载完成后画布未绘制图形'
+          )
+          await verifyLayerToggle(window, 30_000)
+          await verifyWheelZoom(window)
+          if (shotPath) {
+            window.webContents.invalidate()
+            await new Promise((resolve) => setTimeout(resolve, 500))
+          }
+        } catch (error) {
+          const body = await readBody(window).catch(() => '')
+          if (shotPath) {
+            await captureShot(window, shotPath).catch(() => undefined)
+          }
+          console.error(
+            `SMOKE_FAIL ${error instanceof Error ? error.message : String(error)} body=${body.slice(-600)}`
+          )
+          await sidecar.stop()
+          app.exit(1)
+          return
+        }
+      }
+
       if (shotPath) {
         await captureShot(window, shotPath)
       }
@@ -911,9 +974,10 @@ async function countInkPixels(window: BrowserWindow): Promise<number> {
 
 async function waitForCondition(
   predicate: () => Promise<boolean>,
-  message: string
+  message: string,
+  timeoutMs = 5_000
 ): Promise<void> {
-  const deadline = Date.now() + 5_000
+  const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (await predicate()) {
       return
@@ -923,14 +987,49 @@ async function waitForCondition(
   throw new Error(message)
 }
 
-async function verifyLayerToggle(window: BrowserWindow): Promise<void> {
-  await waitForCondition(async () => (await countInkPixels(window)) > 0, '画布未绘制任何图形')
+async function verifyLayerToggle(window: BrowserWindow, timeoutMs = 5_000): Promise<void> {
+  await waitForCondition(
+    async () => (await countInkPixels(window)) > 0,
+    '画布未绘制任何图形',
+    timeoutMs
+  )
 
   await clickButtonByText(window, '全隐')
-  await waitForCondition(async () => (await countInkPixels(window)) === 0, '全隐后画布仍有图形')
+  await waitForCondition(
+    async () => (await countInkPixels(window)) === 0,
+    '全隐后画布仍有图形',
+    timeoutMs
+  )
 
   await clickButtonByText(window, '全显')
-  await waitForCondition(async () => (await countInkPixels(window)) > 0, '全显后画布未恢复')
+  await waitForCondition(
+    async () => (await countInkPixels(window)) > 0,
+    '全显后画布未恢复',
+    timeoutMs
+  )
+}
+
+async function verifyWheelZoom(window: BrowserWindow): Promise<void> {
+  const dispatched = (await window.webContents.executeJavaScript(`(() => {
+    const canvas = document.querySelector('.drawing-canvas');
+    if (!canvas) return false;
+    const rect = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new WheelEvent('wheel', {
+      deltaY: -120,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+      bubbles: true,
+      cancelable: true
+    }));
+    return true;
+  })()`)) as boolean
+  if (!dispatched) {
+    throw new Error('未找到画布，无法验证缩放')
+  }
+  await waitForCondition(
+    async () => (await countInkPixels(window)) > 0,
+    '缩放后画布未绘制图形'
+  )
 }
 
 async function runSettingsSmoke(window: BrowserWindow, shotPath?: string): Promise<void> {

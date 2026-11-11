@@ -5,12 +5,14 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { createInterface } from 'node:readline'
 import {
+  DrawingEntitySchema,
   DrawingSchema,
   HealthResultSchema,
   KbDocumentSchema,
   KbHitSchema,
   SidecarResponseSchema,
   type Drawing,
+  type DrawingEntity,
   type HealthResult,
   type KbDocument,
   type KbHit,
@@ -27,6 +29,7 @@ interface PendingRequest {
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 const PARSE_REQUEST_TIMEOUT_MS = 120_000
 const SUMMARY_REQUEST_TIMEOUT_MS = 180_000
+const LAYER_REQUEST_TIMEOUT_MS = 180_000
 
 export interface SidecarClientOptions {
   projectDir?: string
@@ -110,13 +113,26 @@ export class SidecarClient {
     return DrawingSchema.parse(result)
   }
 
-  async parseDrawingSummary(path: string): Promise<Drawing> {
-    const result = await this.request(
-      'parse_dxf',
-      { path, summary: true },
-      SUMMARY_REQUEST_TIMEOUT_MS
-    )
+  async openDrawing(path: string): Promise<Drawing> {
+    const result = await this.request('open_dxf', { path }, SUMMARY_REQUEST_TIMEOUT_MS)
     return DrawingSchema.parse(result)
+  }
+
+  async layerEntities(path: string, layer: string): Promise<DrawingEntity[]> {
+    const result = (await this.request(
+      'layer_entities',
+      { path, layer },
+      LAYER_REQUEST_TIMEOUT_MS
+    )) as { entities?: unknown }
+    return DrawingEntitySchema.array().parse(result.entities ?? [])
+  }
+
+  async closeDrawing(): Promise<void> {
+    try {
+      await this.request('close_dxf')
+    } catch {
+      // 关闭缓存失败不影响后续打开图纸
+    }
   }
 
   async kbImport(

@@ -25,6 +25,7 @@ import type {
   KbListOutcome,
   KbRebuildOutcome,
   KbSearchOutcome,
+  LayerEntitiesResult,
   ModelProvider,
   ModelSettingsSave,
   PublicModelSettings,
@@ -44,6 +45,7 @@ declare global {
       drawing: {
         open: () => Promise<DrawingOpenResult | null>
         load: (path: string) => Promise<DrawingOpenResult>
+        layer: (path: string, layer: string) => Promise<LayerEntitiesResult>
         autoOpen: () => Promise<{ path: string } | null>
       }
       settings: {

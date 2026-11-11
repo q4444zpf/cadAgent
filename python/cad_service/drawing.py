@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +13,18 @@ MAX_TEXT_SAMPLES = 300
 MAX_TEXT_SAMPLE_LENGTH = 200
 
 
-def parse_dxf(path: str, summary: bool = False) -> dict[str, Any]:
+@dataclass
+class _OpenDocument:
+    path: Path
+    size: int
+    mtime_ns: int
+    doc: Any
+
+
+_open_document: _OpenDocument | None = None
+
+
+def _resolve_file(path: str) -> Path:
     file_path = Path(path)
     if file_path.suffix.lower() == ".dwg":
         raise ValueError("DWG 文件需先经 ODA File Converter 转换为 DXF")
@@ -20,11 +32,80 @@ def parse_dxf(path: str, summary: bool = False) -> dict[str, Any]:
         raise ValueError(f"不支持的文件格式: {file_path.suffix}")
     if not file_path.is_file():
         raise FileNotFoundError(f"图纸不存在: {path}")
+    return file_path.resolve()
 
+
+def _read_document(file_path: Path) -> Any:
     try:
-        doc = ezdxf.readfile(str(file_path))
+        return ezdxf.readfile(str(file_path))
     except (IOError, ezdxf.DXFStructureError) as error:
         raise ValueError(f"无法解析 DXF 文件：{error}") from error
+
+
+def _file_identity(file_path: Path) -> tuple[int, int]:
+    info = file_path.stat()
+    return info.st_size, info.st_mtime_ns
+
+
+def _cached_document(file_path: Path) -> Any | None:
+    cached = _open_document
+    if cached is None or cached.path != file_path:
+        return None
+    try:
+        size, mtime_ns = _file_identity(file_path)
+    except OSError:
+        return cached.doc
+    if cached.size == size and cached.mtime_ns == mtime_ns:
+        return cached.doc
+    return None
+
+
+def _ensure_document(file_path: Path) -> Any:
+    global _open_document
+    cached = _cached_document(file_path)
+    if cached is not None:
+        return cached
+    size, mtime_ns = _file_identity(file_path)
+    doc = _read_document(file_path)
+    _open_document = _OpenDocument(file_path, size, mtime_ns, doc)
+    return doc
+
+
+def open_dxf(path: str) -> dict[str, Any]:
+    file_path = _resolve_file(path)
+    return _summarize_drawing(_ensure_document(file_path), file_path)
+
+
+def layer_entities(path: str, layer: str) -> dict[str, Any]:
+    file_path = _resolve_file(path)
+    modelspace = _ensure_document(file_path).modelspace()
+    unsupported: Counter[str] = Counter()
+    entities: list[dict[str, Any]] = []
+
+    for entity in modelspace:
+        if entity.dxf.layer != layer:
+            continue
+        entities.extend(
+            _convert_entity(
+                entity,
+                inherited_layer=layer,
+                handle=entity.dxf.handle,
+                depth=0,
+                unsupported=unsupported,
+            )
+        )
+
+    return {"layer": layer, "entities": entities}
+
+
+def close_dxf() -> None:
+    global _open_document
+    _open_document = None
+
+
+def parse_dxf(path: str, summary: bool = False) -> dict[str, Any]:
+    file_path = _resolve_file(path)
+    doc = _read_document(file_path)
     if summary:
         return _summarize_drawing(doc, file_path)
     modelspace = doc.modelspace()

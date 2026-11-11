@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
-from cad_service.drawing import parse_dxf
+from cad_service.drawing import close_dxf, layer_entities, open_dxf, parse_dxf
 from cad_service.kb import KbStore
 
 SERVICE_NAME = "cad-service"
@@ -27,6 +27,30 @@ def _parse_dxf(params: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(path, str) or not path:
         raise ValueError("parse_dxf 需要非空的 path 参数")
     return parse_dxf(path, summary=params.get("summary") is True)
+
+
+def _path_param(params: dict[str, Any], method: str) -> str:
+    path = params.get("path")
+    if not isinstance(path, str) or not path:
+        raise ValueError(f"{method} 需要非空的 path 参数")
+    return path
+
+
+def _open_dxf(params: dict[str, Any]) -> dict[str, Any]:
+    return open_dxf(_path_param(params, "open_dxf"))
+
+
+def _layer_entities(params: dict[str, Any]) -> dict[str, Any]:
+    path = _path_param(params, "layer_entities")
+    layer = params.get("layer")
+    if not isinstance(layer, str) or not layer:
+        raise ValueError("layer_entities 需要非空的 layer 参数")
+    return layer_entities(path, layer)
+
+
+def _close_dxf(_: dict[str, Any]) -> dict[str, Any]:
+    close_dxf()
+    return {"closed": True}
 
 
 def _store(params: dict[str, Any]) -> KbStore:
@@ -73,6 +97,9 @@ def _kb_search(params: dict[str, Any]) -> dict[str, Any]:
 _HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "health": _health,
     "parse_dxf": _parse_dxf,
+    "open_dxf": _open_dxf,
+    "layer_entities": _layer_entities,
+    "close_dxf": _close_dxf,
     "kb_import": _kb_import,
     "kb_list": _kb_list,
     "kb_delete": _kb_delete,

@@ -8,7 +8,7 @@ import {
   type SidecarStatus
 } from '../../shared/protocol'
 import { DrawingCanvas } from './drawing/DrawingCanvas'
-import { SummaryPreview } from './drawing/SummaryPreview'
+import { ProgressivePreview } from './drawing/ProgressivePreview'
 import { resolveEntityColor } from './drawing/aci'
 import { ChatPanel } from './chat/ChatPanel'
 import { DesignView } from './design/DesignView'
@@ -416,7 +416,7 @@ export default function App() {
                   </button>
                 </>
               ) : null}
-              {drawing && !drawing.summaryOnly ? (
+              {drawing && (drawing.bounds || !drawing.summaryOnly) ? (
                 <>
                   <span className="muted">滚轮缩放 · 拖动平移 · 双击适应窗口</span>
                   <button type="button" onClick={() => setFitSignal((current) => current + 1)}>
@@ -457,7 +457,13 @@ export default function App() {
 
           {drawing ? (
             drawing.summaryOnly ? (
-              <SummaryPreview drawing={drawing} />
+              <ProgressivePreview
+                key={drawing.path}
+                drawing={drawing}
+                visibleLayers={visibleLayers}
+                highlight={highlight}
+                fitSignal={fitSignal}
+              />
             ) : (
               <DrawingCanvas
                 key={drawing.path}

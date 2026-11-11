@@ -24,6 +24,7 @@ import type {
   KbListOutcome,
   KbRebuildOutcome,
   KbSearchOutcome,
+  LayerEntitiesResult,
   ModelProvider,
   ModelSettingsSave,
   PublicModelSettings,
@@ -49,6 +50,8 @@ contextBridge.exposeInMainWorld('cad', {
   drawing: {
     open: (): Promise<DrawingOpenResult | null> => ipcRenderer.invoke('drawing:open'),
     load: (path: string): Promise<DrawingOpenResult> => ipcRenderer.invoke('drawing:load', path),
+    layer: (path: string, layer: string): Promise<LayerEntitiesResult> =>
+      ipcRenderer.invoke('drawing:layer', { path, layer }),
     autoOpen: (): Promise<{ path: string } | null> => ipcRenderer.invoke('drawing:auto-open')
   },
   settings: {

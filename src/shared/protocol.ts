@@ -139,6 +139,19 @@ export const DrawingOpenResultSchema = z.discriminatedUnion('ok', [
 
 export type DrawingOpenResult = z.infer<typeof DrawingOpenResultSchema>
 
+export const LayerEntitiesRequestSchema = z.object({
+  path: z.string().min(1),
+  layer: z.string().min(1)
+})
+
+export type LayerEntitiesRequest = z.infer<typeof LayerEntitiesRequestSchema>
+
+export interface LayerEntitiesResult {
+  ok: boolean
+  entities: DrawingEntity[]
+  error?: string
+}
+
 export const ModelSettingsSchema = z.object({
   provider: z.string().min(1),
   model: z.string().min(1),

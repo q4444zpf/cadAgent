@@ -23,6 +23,7 @@ const expect = takeOption('--expect')
 const shot = takeOption('--shot')
 const settingsMode = args.includes('--settings')
 const layersMode = args.includes('--layers')
+const layerLoadMode = args.includes('--layer-load')
 const qaMode = args.includes('--qa')
 const highlightMode = args.includes('--highlight')
 const kbMode = args.includes('--kb')
@@ -42,6 +43,7 @@ const env = {
   ...(shot ? { SMOKE_SHOT: resolve(shot) } : {}),
   ...(settingsMode ? { SMOKE_SETTINGS: '1' } : {}),
   ...(layersMode ? { SMOKE_LAYERS: '1' } : {}),
+  ...(layerLoadMode ? { SMOKE_LAYER_LOAD: '1' } : {}),
   ...(qaMode ? { SMOKE_QA: '1' } : {}),
   ...(highlightMode ? { SMOKE_HIGHLIGHT: '1' } : {}),
   ...(kbMode ? { SMOKE_KB: '1' } : {}),

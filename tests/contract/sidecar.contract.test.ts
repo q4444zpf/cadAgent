@@ -66,6 +66,22 @@ describe('Node <-> Python sidecar contract', () => {
       client.parseDrawing(path.resolve('samples/fixtures/missing.dxf'))
     ).rejects.toThrow(/图纸不存在/)
   })
+
+  it('keeps the drawing open and loads entities one layer at a time', async () => {
+    const file = path.resolve('samples/fixtures/block.dxf')
+
+    const summary = await client.openDrawing(file)
+
+    expect(summary.summaryOnly).toBe(true)
+    expect(summary.layers.find((layer) => layer.name === 'BLOCK')?.entityCount).toBe(1)
+
+    const entities = await client.layerEntities(file, 'BLOCK')
+    expect(entities).toHaveLength(2)
+    expect(entities.every((entity) => entity.layer === 'BLOCK')).toBe(true)
+    expect(await client.layerEntities(file, 'MISSING')).toEqual([])
+
+    await client.closeDrawing()
+  })
 })
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void> {

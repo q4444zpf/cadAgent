@@ -8,7 +8,7 @@ export function SummaryPreview({ drawing }: { drawing: Drawing }) {
     <div className="preview-summary">
       <strong>大图纸摘要模式</strong>
       <p>
-        该图纸超过 50 MB，已按摘要方式加载：只统计图层与实体类型，不展开几何图形，因此不显示图形预览。
+        该图纸超过 50 MB：先展示图层与实体统计，几何图形随后按图层从小到大逐步加载，无需等待整张图解析完成。
       </p>
       <p className="muted">
         读图问答仍可用于数量、图层、结构与文字标注类问题；按实体检索与高亮暂不可用。

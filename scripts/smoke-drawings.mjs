@@ -35,7 +35,12 @@ const fixtures = [
   { dxf: 'samples/fixtures/dim.dxf', expect: 'DIM', shot: 'out/smoke-dim.png' },
   { dxf: 'samples/fixtures/broken.dxf', expect: '无法打开图纸', shot: 'out/smoke-broken.png' },
   { dxf: 'samples/fixtures/placeholder.dwg', expect: 'DWG 需先转换', shot: 'out/smoke-dwg.png' },
-  { dxf: oversizeFixture, expect: '大图纸摘要', shot: 'out/smoke-summary.png' }
+  {
+    dxf: oversizeFixture,
+    expect: '大图纸摘要',
+    shot: 'out/smoke-summary.png',
+    layerLoad: true
+  }
 ]
 
 for (const fixture of fixtures) {
@@ -49,7 +54,8 @@ for (const fixture of fixtures) {
       fixture.expect,
       '--shot',
       fixture.shot,
-      ...(fixture.layers ? ['--layers'] : [])
+      ...(fixture.layers ? ['--layers'] : []),
+      ...(fixture.layerLoad ? ['--layer-load'] : [])
     ],
     { cwd: root, stdio: 'inherit' }
   )
