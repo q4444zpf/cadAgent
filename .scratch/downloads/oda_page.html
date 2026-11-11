@@ -1,0 +1,1483 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr" prefix="og: http://ogp.me/ns#">
+<head>
+        <script src="https://cdn.cookiehub.eu/c2/2fad3fdb.js"></script>    <script>
+  window.odaConsent = (function () {
+    // False on environments without a domain code. Everything then behaves as it
+    // did before CookieHub — see the fallback branch of html.html.twig.
+    var enabled = true;
+    var known = !enabled;
+    var knownCbs = [];
+    var changeCbs = [];
+    var uiCbs = [];
+    var uiObserver = null;
+    var api;
+
+    function ready() {
+      return enabled && window.cookiehub && typeof window.cookiehub.hasConsented === 'function';
+    }
+
+    function findUi() {
+      return document.querySelector('.ch2-container');
+    }
+
+    function flushKnown() {
+      known = true;
+      while (knownCbs.length) {
+        knownCbs.shift()(api);
+      }
+    }
+
+    function whenUi(cb) {
+      // Without a CMP there is no UI and never will be — callers that need to work
+      // in that case must branch on isEnabled() themselves.
+      if (!enabled) {
+        return;
+      }
+
+      api.whenKnown(function () {
+        var el = findUi();
+
+        if (el) {
+          cb(el);
+          return;
+        }
+
+        uiCbs.push(cb);
+
+        if (uiObserver) {
+          return;
+        }
+
+        // The .ch2 container goes straight into <body>, but the vendor fills it in
+        // more than one step, so watch the subtree and disconnect on the first hit.
+        uiObserver = new MutationObserver(function () {
+          var found = findUi();
+
+          if (!found) {
+            return;
+          }
+
+          uiObserver.disconnect();
+          uiObserver = null;
+
+          while (uiCbs.length) {
+            uiCbs.shift()(found);
+          }
+        });
+        uiObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+      });
+    }
+
+    api = {
+      isEnabled: function () { return enabled; },
+      isKnown: function () { return known; },
+
+      // Only trustworthy once isKnown() is true — hence whenKnown() below.
+      // Returns true with no CMP: that is the pre-CookieHub behaviour, and it is
+      // safe exactly as long as the rollout order holds (the domain code is written
+      // in the same operation that removes eu_cookie_compliance).
+      hasConsented: function (category) {
+        return ready() ? window.cookiehub.hasConsented(category) : !enabled;
+      },
+
+      hasAnswered: function () {
+        return ready() ? window.cookiehub.hasAnswered() : !enabled;
+      },
+
+      // The vendor's openSettings() has no null guard and is a silent no-op until
+      // .ch2-settings exists, so wait for both the state and the rendered UI.
+      openSettings: function () {
+        whenUi(function () {
+          if (ready()) {
+            window.cookiehub.openSettings();
+          }
+        });
+      },
+
+      whenKnown: function (cb) {
+        if (known) {
+          cb(api);
+        }
+        else {
+          knownCbs.push(cb);
+        }
+      },
+
+      whenUi: whenUi,
+
+      onChange: function (cb) { changeCbs.push(cb); },
+
+      // Called from the CookieHub callbacks below. Not public API.
+      _initialise: function () {
+        flushKnown();
+      },
+
+      _change: function () {
+        flushKnown();
+
+        for (var i = 0; i < changeCbs.length; i++) {
+          changeCbs[i](api);
+        }
+      }
+    };
+
+    return api;
+  }());
+</script>
+            <script>
+  // The CMP bootstrap, deliberately alone in its own element and deliberately free of
+  // every third-party hostname. Everything that names one lives in the next element.
+  //
+  // Why the split: CookieHub's own Automatic Cookie Blocking scans the TEXT of inline
+  // scripts for the patterns of the services it knows — service 20 "Microsoft Clarity"
+  // is literally `contains: www.clarity[.]ms`, service 10 "LinkedIn Insight" is
+  // `contains: snap.licdn[.]com` — and it neutralises the WHOLE element by rewriting it
+  // to type="text/plain". On 2026-08-20 that took this file down in production: the
+  // injector strings matched, the element that carried cookiehub.load() went inert, and
+  // every visitor without a stored consent got no dialog at all, hence no consent and
+  // therefore nothing. Keeping load() in an element with no tracker string in it means
+  // the consent UI can no longer be blocked by the consent vendor's own blocker.
+  //
+  // The dashboard has Blocker → exclude, which would also fix it. Not relying on that on
+  // purpose: a manual step in somebody else's UI is exactly what cost this project a day
+  // of Clarity and LinkedIn data already.
+  document.addEventListener("DOMContentLoaded", function () {
+    // window.cookiehub is absent when an ad blocker eats cdn.cookiehub.eu. Failing
+    // closed is correct — no consent state means no tags — but it must not throw on
+    // every page view.
+    if (!window.cookiehub) return;
+
+        window.cookiehub.load({
+      language: "en",
+      onInitialise:   function () { window.odaConsent._initialise(); },
+      onStatusChange: function () { window.odaConsent._change(); }
+    });
+
+    // Canary for the failure described above. If the tag element ever goes inert again,
+    // this says so on the spot instead of losing a day of data in silence.
+    if (!window.__odaTagsReady) {
+      console.error('ODA: consent-gated tags did not initialise. Check whether automatic cookie blocking rewrote their <script> to type="text/plain".');
+    }
+  });
+</script>
+<script>
+  // Consent-gated tags.
+  //
+  // Every third-party hostname here is assembled from parts, so that the text of this
+  // element contains neither `www.clarity[.]ms` nor `snap.licdn[.]com` — the two patterns
+  // CookieHub's automatic cookie blocking matches (see the element above). The GTM host
+  // matches no rule today, but it is assembled the same way: if the vendor ever adds a
+  // Tag Manager service, an unprotected literal would take all three tags down at once.
+  //
+  // Blocking these before consent is this file's whole job — it is done by not calling
+  // the injectors, which is strictly stronger than a text match on our own markup.
+  //
+  // The dotted hostnames above are written `host[.]tld` for the same reason: the blocker
+  // reads the element's whole text, comments included, so naming one of those hosts in
+  // prose here would be enough to have this element rewritten to type="text/plain".
+  window.__odaTagsReady = true;
+
+  // Every category this file reacts to. Drives the consent snapshot and the
+  // withdrawal check, and must stay a superset of ODA_CONTAINER_CATS below —
+  // shrinking it would leave now.marketing undefined and silently kill LinkedIn.
+  var ODA_ALL_CATS = ['analytics', 'marketing'];
+
+  // Categories whose tags actually live inside the container. Inventory of the
+  // published GTM-PVS6X2SD as of 2026-08-20: one GA4 config, three GA4 event tags
+  // (scroll_depth, no_scroll_detected, no_scroll_detected_20), one Mouseflow custom
+  // HTML, and three listeners. All of them analytics; not one marketing tag.
+  //
+  // So the container must not come up on marketing alone. Its tags carry no consent
+  // checks of their own, so they fired anyway: measured on production with analytics
+  // denied and marketing granted, GA4 sent page_view and all three scroll events with
+  // gcs=G110 and Mouseflow recorded the session. Gating here is the in-code equivalent
+  // of the per-tag consent checks in the container UI.
+  //
+  // Add a marketing tag to the container and two things must come back: 'marketing' in
+  // this list, and a dataLayer push on a denied -> granted transition so the new tag
+  // fires on the current page view (the container does not replay triggers). That push
+  // used to live here and was removed: the published container has no trigger for it,
+  // so it never delivered anything.
+  var ODA_CONTAINER_CATS = ['analytics'];
+  var odaPrev = null;
+
+  function odaInjectGtm() {
+    if (window.__odaGtmLoaded) return;
+    window.__odaGtmLoaded = true;
+    var host = ['www', 'googletagmanager', 'com'].join('.');
+    (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});
+      var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';
+      j.async=true;j.src='https://'+host+'/gtm.js?id='+i+dl;
+      f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','GTM-PVS6X2SD');
+  }
+
+  // Microsoft Clarity records sessions, so it belongs to `analytics`. Same snippet as
+  // ever, including the is_twig_debug guard that keeps development environments out of
+  // the Clarity project.
+  var ODA_CLARITY = true;
+
+  function odaInjectClarity() {
+    if (window.__odaClarityLoaded) return;
+    window.__odaClarityLoaded = true;
+    var host = ['www', 'clarity', 'ms'].join('.');
+    (function(c,l,a,r,i,t,y){
+        c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+        t=l.createElement(r);t.async=1;t.src="https://"+host+"/tag/"+i;
+        y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+    })(window, document, "clarity", "script", "gb5ijg08p7");
+  }
+
+  // Clarity's own consent signal, and it is not optional.
+  //
+  // Session recording belongs to `analytics`, but the tag also sets Microsoft's shared
+  // advertising identifier: measured on production on 2026-08-21 with analytics granted
+  // and marketing denied, one and the same value sat in MUID on two Microsoft domains
+  // and in SRM_B, alongside MR, SM and ANONCHK. So a visitor who refused marketing was
+  // still getting an ad identifier. The vendor's answer is this API: with ad storage
+  // denied it writes the first-party session cookies and nothing for advertising, and
+  // the recording keeps working.
+  //
+  // Relying on the automatic Google-consent-mode bridge is not enough. The vendor
+  // documents that it reads those signals, our CMP emits them, the tag is injected
+  // after the choice is made — and the identifier was set anyway. Their consent mode
+  // defaults to on only for EEA/UK/CH visitors, which is the likely reason; either way
+  // an explicit call is the part we control.
+  //
+  // The tag snippet above installs the command queue before the script itself arrives,
+  // so calling this immediately after injection is safe: the command waits in the queue
+  // and is replayed on load, which is what the vendor's own integration guide asks for.
+  //
+  // Withdrawal is handled by the reload in odaGtmSync: an identifier already stored on
+  // a Microsoft domain cannot be deleted from here, so the honest thing is to stop
+  // feeding it and let the next page view run with advertising storage denied.
+  function odaClarityConsent(consent) {
+    if (!window.__odaClarityLoaded || typeof window.clarity !== 'function') return;
+    window.clarity('consentv2', {
+      analytics_Storage: consent.hasConsented('analytics') ? 'granted' : 'denied',
+      ad_Storage: consent.hasConsented('marketing') ? 'granted' : 'denied'
+    });
+  }
+
+  // The LinkedIn Insight tag feeds ad conversions and retargeting audiences, so it
+  // belongs to `marketing`. Same snippet as ever, with the two inline scripts that used
+  // to sit at the end of <body> merged into one function.
+  function odaInjectLinkedIn() {
+    if (window.__odaLinkedInLoaded) return;
+    window.__odaLinkedInLoaded = true;
+    window._linkedin_partner_id = "2569161";
+    window._linkedin_data_partner_ids = window._linkedin_data_partner_ids || [];
+    window._linkedin_data_partner_ids.push(window._linkedin_partner_id);
+    (function (l) {
+      if (!l) {
+        window.lintrk = function (a, b) { window.lintrk.q.push([a, b]) };
+        window.lintrk.q = []
+      }
+      var host = ['snap', 'licdn', 'com'].join('.');
+      var s = document.getElementsByTagName("script")[0];
+      var b = document.createElement("script");
+      b.type = "text/javascript";
+      b.async = true;
+      // The node goes in first and its src is assigned in a LATER TASK. Both halves are
+      // load-bearing, and the delay is the half that does the work.
+      //
+      // Why: the automatic cookie blocking watches for added script nodes and reads
+      // their src; this host is one of the patterns it knows, and under a partial choice
+      // its check can never pass — it asks whether the SERVICE was consented to, and
+      // that list stays empty while the domain runs on category consent. But its
+      // MutationObserver callback is delivered at the end of the current task, not at
+      // the moment of insertion, so it reads whatever src the node has by then.
+      // Measured on production: inserting first and assigning src on the next line
+      // changes nothing, the tag is still rewritten to type="text/plain". A macrotask
+      // runs after that callback, so the blocker sees a node with no src, matches
+      // nothing, and leaves it alone — attribute changes are not observed and there is
+      // no later sweep (verified across a consent change on the same page view). The
+      // load still happens: assigning src to a connected script that has not started
+      // yet prepares it.
+      //
+      // Only this injector needs the dance. The container and Clarity hosts match no src
+      // pattern today; if that ever changes, this is the shape to copy. What cannot be
+      // fixed from here is the second script the LinkedIn loader injects itself
+      // (insight.old.min.js): it sets src before insertion, so it is still rewritten,
+      // and it works only because taking the src away does not cancel a request that has
+      // already started. Closing that one needs Blocker -> exclude in the dashboard.
+      s.parentNode.insertBefore(b, s);
+      window.setTimeout(function () {
+        b.src = "https://" + host + "/li.lms-analytics/insight.min.js";
+      }, 0);
+    })(window.lintrk);
+  }
+
+  // The conversion events in themes/oda/js/targeting.js, themes/oda/js/webinars.js and
+  // modules/teigha/teigha_trial_application/js/trial_application.js call gtag(). Until
+  // this migration the google_tag module defined window.gtag and loaded the Google tag
+  // runtime on every page, so those events reached GA4 without going through the
+  // container. Uninstalling that module took window.gtag with it and the events went
+  // silently nowhere for anyone.
+  //
+  // The container does bring its own copy of that runtime, but it does not expose an
+  // entry point and it does not act on a loose event. Measured on production: the same
+  // event scoped with send_to produces exactly one request, and without send_to
+  // produces none. So all this needs is the classic shim plus that scope — no second
+  // runtime, no config command, nothing of the container's overridden, and no page_view
+  // of our own to duplicate.
+  //
+  // The id is assembled from two pieces on purpose: CookieHub's automatic cookie
+  // blocking matches the literal text of an inline script against the services it
+  // knows, and a config command naming a stream id verbatim is one of its patterns.
+  // A match rewrites the whole element to type="text/plain" — see the element above.
+  var ODA_GA4 = 'G' + '-JMPEX8F05P';
+
+  function odaInjectGtag() {
+    if (window.__odaGtagLoaded) return;
+    window.__odaGtagLoaded = true;
+    window.dataLayer = window.dataLayer || [];
+    window.gtag = window.gtag || function () {
+      var a = Array.prototype.slice.call(arguments);
+      if (a[0] === 'event') {
+        if (!a[2] || typeof a[2] !== 'object') a[2] = {};
+        if (!a[2].send_to) a[2].send_to = ODA_GA4;
+      }
+      window.dataLayer.push((function () { return arguments; }).apply(null, a));
+    };
+  }
+
+  function odaGtmSync(consent) {
+    var now = {};
+    ODA_ALL_CATS.forEach(function (c) { now[c] = consent.hasConsented(c); });
+
+    // Withdrawal: a category was granted and is now denied.
+    var revoked = odaPrev && ODA_ALL_CATS.some(function (c) { return odaPrev[c] && !now[c]; });
+    odaPrev = now;
+
+    // Withdrawal is handled FIRST and ends the call. A third-party script that has
+    // already executed cannot be taken back out of the page, so a reload is the only
+    // honest answer — and it has to happen before the injectors, not after them. One
+    // Save that swaps categories (marketing off, analytics on) arrives as a single call
+    // where revoked is true and analytics is granted: injecting first would raise the
+    // container, let it send a page_view, and then reload straight into a second one.
+    if (revoked && (window.__odaGtmLoaded || window.__odaClarityLoaded ||
+                    window.__odaLinkedInLoaded || window.__odaGtagLoaded)) {
+      window.location.reload();
+      return;
+    }
+
+    // Every injector is idempotent, so it does not matter that this runs again on each
+    // later consent change: the second call is a no-op.
+    if (ODA_CONTAINER_CATS.some(function (c) { return now[c]; })) odaInjectGtm();
+    if (now.analytics) odaInjectGtag();
+    if (ODA_CLARITY && now.analytics) odaInjectClarity();
+    if (now.marketing) odaInjectLinkedIn();
+
+    // Runs on every sync, not only right after injection: granting marketing later in
+    // the visit has to upgrade Clarity's advertising storage on the page the visitor is
+    // already on. Guarded inside, so it is a no-op while Clarity is not loaded.
+    odaClarityConsent(consent);
+  }
+
+  window.odaConsent.whenKnown(odaGtmSync);
+  window.odaConsent.onChange(odaGtmSync);
+</script>
+            <script>
+  (function () {
+    try {
+      var match = document.cookie.match(/(?:^|; )oda-closed-header-banners=([^;]*)/);
+      var ids = match ? JSON.parse(decodeURIComponent(match[1])) : [];
+      var selectors = [];
+
+      if (!Array.isArray(ids)) {
+        return;
+      }
+      for (var i = 0; i < ids.length; i++) {
+        if (typeof ids[i] === 'string' && /^[a-z0-9-]{1,64}$/.test(ids[i])) {
+          selectors.push('[data-header-banner-id="' + ids[i] + '"]');
+        }
+      }
+      if (selectors.length) {
+        var style = document.createElement('style');
+        style.textContent = selectors.join(',') + '{display:none!important}';
+        document.head.appendChild(style);
+      }
+    } catch (e) {}
+  })();
+</script>
+    <meta charset="utf-8" />
+<meta name="Generator" content="Drupal 10 (https://www.drupal.org)" />
+<meta name="MobileOptimized" content="width" />
+<meta name="HandheldFriendly" content="true" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta property="og:site_name" content="Open Design Alliance" />
+<meta property="og:logo" content="https://www.opendesign.com/themes/oda/img/oda_logo_small.png" />
+<meta property="og:url" content="https://www.opendesign.com/guestfiles/oda_file_converter" />
+<meta property="og:type" content="website" />
+<meta property="og:image" content="https://www.opendesign.com/themes/oda/img/oda_sign_black_orange.png" />
+<meta property="og:image:width" content="214" />
+<meta property="og:image:height" content="216" />
+<meta property="og:title" content="ODA File Converter | Open Design Alliance" />
+<meta property="og:description" content="ODA File Converter. ODA builds SDKs for people who work with complex engineering data" />
+<meta name="description" content="ODA File Converter. ODA builds SDKs for people who work with complex engineering data" />
+<link rel="alternate" type="text/markdown" title="ODA File Converter" href="https://www.opendesign.com/guestfiles/oda_file_converter.md" />
+<link rel="icon" href="https://static.opendesign.com/themes/oda/favicon.ico" type="image/vnd.microsoft.icon" />
+<link rel="alternate" hreflang="en" href="https://www.opendesign.com/guestfiles/oda_file_converter" />
+<link rel="alternate" hreflang="ja" href="https://www.opendesign.com/ja/guestfiles/oda_file_converter" />
+<link rel="alternate" hreflang="zh-hans" href="https://www.opendesign.com/cn/guestfiles/oda_file_converter" />
+<script>window.a2a_config=window.a2a_config||{};a2a_config.callbacks=[];a2a_config.overlays=[];a2a_config.templates={};</script>
+
+    <title>ODA File Converter | Open Design Alliance</title>
+    <link rel="stylesheet" media="all" href="https://static.opendesign.com/files/css/css_fUR5efKS3zgzaB90eiS_nB0n4MiifijZ9DvLmUTDhMs.css?delta=0&amp;language=en&amp;theme=oda&amp;include=eJxdyUEOwjAMRNELNeRI1ZikJZLriWKzyO2BgoTU3bz5KCUImxm_cdsGLRYW5F0p0OQxtdn-vRgPHKkPnmSvlhzmp_pTtN3_HhQGkyvk4zXGuyii0fLFi0-PemSB1xc3AThz" />
+<link rel="stylesheet" media="all" href="https://static.opendesign.com/files/css/css_tkbaAlZskpo0A_9aLSWQVZKi5IkqazgMp2G72vzeH-M.css?delta=1&amp;language=en&amp;theme=oda&amp;include=eJxdyUEOwjAMRNELNeRI1ZikJZLriWKzyO2BgoTU3bz5KCUImxm_cdsGLRYW5F0p0OQxtdn-vRgPHKkPnmSvlhzmp_pTtN3_HhQGkyvk4zXGuyii0fLFi0-PemSB1xc3AThz" />
+
+    <script src="https://static.opendesign.com/themes/oda/js/header-banner-frames.js?toad36"></script>
+
+</head>
+<body data-spy="scroll" data-target="#sections-nav" data-offset="512">
+    
+      <div class="dialog-off-canvas-main-canvas" data-off-canvas-main-canvas>
+        
+<header class="oda-header" data-elastic-exclude>
+    <nav class="navbar navbar-expand-xl navbar-light">
+        <div class="container">
+            <button class="navbar-toggler collapsed" data-toggle="collapse" id="navbar-toggler-main" data-target="#header-navbar" aria-controls="header-navbar" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <a class="navbar-brand" href="/">
+                
+<svg xmlns="http://www.w3.org/2000/svg" width="60" height="29" viewBox="0 0 60 29" fill="none">
+    <g clip-path="url(#clip0_9534_4112)">
+        <path d="M46.6198 0L42.77 4.68355L51.6902 23.4646H43.5681L39.3428 28.1481H53.8968H55.0235H60L46.6198 0Z" fill="#0D0D0D"/>
+        <path d="M43.4742 14.3785C43.4742 7.02533 37.6526 1.03038 30.4226 0.655701H29.7183H29.0141H21.878L27.1362 6.55697H29.7183C34.0376 6.55697 37.5118 10.0696 37.5118 14.3785C37.5118 18.6874 33.9906 22.2 29.6714 22.2H28.9671H27.1831L21.7841 28.1013H30.4226C37.6996 27.7266 43.4742 21.7317 43.4742 14.3785Z" fill="#0D0D0D"/>
+        <path d="M13.7089 0.655701C7.98121 0.655701 3.05164 4.16836 0.985917 9.13293H7.93427C9.38966 7.54052 11.4084 6.55697 13.7089 6.55697C15.3521 6.55697 16.8545 7.07217 18.0751 7.9152C20.1878 9.32027 21.5493 11.7089 21.5493 14.3785C21.5493 17.095 20.1878 19.4836 18.0751 20.8418C16.8075 21.6848 15.3052 22.2 13.7089 22.2C11.1267 22.2 8.82628 20.9355 7.37088 18.9684H0.704224C2.58216 24.3076 7.69953 28.1013 13.662 28.1013C21.2676 28.1013 27.4178 21.919 27.4178 14.3785C27.4648 6.83799 21.3145 0.655701 13.7089 0.655701Z" fill="#0D0D0D"/>
+        <path d="M0.375581 10.8658C0.187788 11.5215 0.0938967 12.1772 0 12.8329V13.2544H6.00938C6.15023 12.4114 6.38497 11.5684 6.76056 10.819H0.375581V10.8658Z" fill="#FF2F00"/>
+        <path d="M0 14.8469V15.8772C0.0469483 16.3456 0.140845 16.814 0.234742 17.2823H6.47887C6.19718 16.5329 6.00938 15.7367 5.96243 14.8937H0V14.8469Z" fill="#FF2F00"/>
+    </g>
+    <defs>
+        <clipPath id="clip0_9534_4112">
+            <rect width="60" height="28.1481" fill="white"/>
+        </clipPath>
+    </defs>
+</svg>
+            </a>
+            <div class="collapse navbar-collapse" id="header-navbar">
+                    
+<ul class="navbar-nav">
+                        <li class="nav-item dropdown">
+                                                                <a href="/products" class="nav-link dropdown-toggle" role="button" aria-haspopup="true" aria-expanded="false" onclick="return false" data-drupal-link-system-path="node/802">                    Products
+                    <svg class='caret' width='7' height='12' viewBox='0 0 7 12' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M1 1L6 6L1 11' stroke-linecap='round' stroke-linejoin='round'/></svg>                </a>
+                                    <ul class="dropdown-menu">
+                                                    <li class="nav-item">
+                                <div class="container">
+    <nav class="main-menu-products-info">
+        <svg xmlns="http://www.w3.org/2000/svg" width="43" height="43" viewBox="0 0 43 43" fill="none">
+            <path d="M27.5303 11.4939C25.7033 10.2208 23.4546 9.44288 20.9951 9.44288C17.6758 9.44288 14.7484 10.823 12.5904 13.0765H2.12959C5.28266 5.71539 12.5903 0.531693 21.0654 0.531693C32.3791 0.531693 41.6549 9.86722 41.5143 21.2537C41.5143 32.6402 32.3088 41.9758 20.9249 41.9758C12.0967 41.9758 4.5062 36.3701 1.62262 28.4447H11.7046C13.8904 31.266 17.2442 33.0646 20.9951 33.0646C23.3843 33.0646 25.633 32.2866 27.5303 31.0136C30.6925 28.9626 32.7304 25.3557 32.7304 21.2537C32.7304 17.2225 30.6925 13.6156 27.5303 11.4939Z" stroke="#FF2F00" stroke-width="1.06338" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M0.546484 18.9198C0.674169 18.0203 0.801847 17.0623 1.03492 16.1521H10.535C10.0923 17.1172 9.79331 18.1735 9.59688 19.2381H0.546484V18.9198Z" stroke="#FF2F00" stroke-width="1.06338" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M0.813883 25.3394C0.661696 24.7459 0.601061 24.182 0.546484 23.5169L0.531738 22.3612H9.49392C9.58167 23.4021 9.80897 24.3949 10.1363 25.3394H0.813883Z" stroke="#FF2F00" stroke-width="1.06338" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <a href="https://www.opendesign.com/products">ODA Platform</a>
+        <a href="https://www.opendesign.com/releases">27.10 Release - Oct 30, 2026</a>
+        <a href="https://www.opendesign.com/supported-platforms">Supported platforms</a>
+    </nav>
+    <nav class="main-menu-products-main">
+        <ul>
+            <li>
+                <h5>2D CAD</h5>
+                <a href="https://www.opendesign.com/products/drawings">Drawings<small>DWG DGN</small></a>
+                <a href="https://www.opendesign.com/products/map3d">Map</a>
+                <a href="https://www.opendesign.com/products/architecture">Architecture</a>
+            </li>
+            <li>
+                <h5>BIM</h5>
+                <a href="https://www.opendesign.com/products/bimrv">BimRv<small>Revit</small></a>
+                <a href="https://www.opendesign.com/products/bimnv">BimNv<small>Navisworks</small></a>
+                <a href="https://www.opendesign.com/products/ifc-sdk">IFC</a>
+                <a href="https://www.opendesign.com/products/scan-to-bim">Scan-to-BIM</a>
+                <a href="https://www.opendesign.com/products/survey-sdk">Survey SDK</a>
+                <a href="https://www.opendesign.com/products/steel-sdk">Steel SDK</a>
+            </li>
+            <li>
+                <h5>3D CAD</h5>
+                <a href="https://www.opendesign.com/products/mechanical">Mechanical</a>
+                <a href="https://www.opendesign.com/products/civil">Civil</a>
+                <a href="https://www.opendesign.com/products/step">STEP</a>
+                <a href="https://www.opendesign.com/products/mcad-sdk">MCAD<small>JT, Solidworks, Inventor etc.</small></a>
+            </li>
+            <li>
+                <h5><span>in</span>WEB<sup>&trade;</sup></h5>
+                <a href="https://www.opendesign.com/products/inweb"><span>in</span>WEB<sup>&trade;</sup></a>
+                <a href="https://www.opendesign.com/products/cde">CDE</a>
+            </li>
+            <li>
+                <h5>Technologies</h5>
+                <a href="https://www.opendesign.com/products/mcp-servers">MCP Servers</a>
+                <a href="https://www.opendesign.com/products/visualize">Visualize</a>
+                <a href="https://www.opendesign.com/products/exchange">Exchange</a>
+                <a href="https://www.opendesign.com/products/publish">Publish</a>
+            </li>
+        </ul>
+        </nav>
+    <nav class="main-menu-products-free">
+        <h5>Free</h5>
+        <a href="https://openifcviewer.com/" target="_blank">ODA IFC Viewer</a>
+        <a href="https://openstepviewer.com/" target="_blank">ODA STEP Viewer</a>
+                <a href="https://www.opendesign.com/guestfiles/oda_drawings_explorer">Drawings Explorer</a>
+        <a href="https://www.opendesign.com/guestfiles/oda_viewer">ODA Viewer</a>
+        <a href="https://cloud.opendesign.com/index.html#/login">Web Viewer</a>
+        <a href="https://www.opendesign.com/guestfiles/oda_file_converter">DWG convertor</a>
+    </nav>
+</div>
+                            </li>
+                                            </ul>
+                            </li>
+                                <li class="nav-item dropdown">
+                                                                <a href="/pricing" class="nav-link dropdown-toggle" role="button" aria-haspopup="true" aria-expanded="false" onclick="return false" data-drupal-link-system-path="pricing">                    Pricing
+                    <svg class='caret' width='7' height='12' viewBox='0 0 7 12' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M1 1L6 6L1 11' stroke-linecap='round' stroke-linejoin='round'/></svg>                </a>
+                                    <ul class="dropdown-menu">
+                                                    <li class="nav-item">
+                                <div class="container">
+    <nav class="main-menu-pricing">
+        <a href="/pricing">
+            <i>
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
+                    <path d="M23.9595 16.2755C23.8094 15.8508 23.5778 15.4646 23.2834 15.1358C22.6573 14.4362 21.7475 13.996 20.7348 13.996H18.0882C16.4026 13.996 15.0361 15.3625 15.0361 17.0481C15.0361 18.4824 16.0348 19.7232 17.436 20.0298L21.4655 20.9112C23.0352 21.2546 24.1541 22.6457 24.1541 24.2525C24.1541 26.1409 22.6232 27.673 20.7348 27.673H18.4553C16.9666 27.673 15.7 26.7215 15.2306 25.3935M19.5938 13.9955V10.5762M19.5938 31.0913V27.6721M19.5936 37.5025C28.7997 37.5025 36.2625 30.0398 36.2625 20.8337C36.2625 11.6278 28.7997 4.16486 19.5936 4.16486C10.3877 4.16486 2.9248 11.6278 2.9248 20.8337C2.9248 30.0398 10.3877 37.5025 19.5936 37.5025Z" stroke="#FF2F00" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>            </i>
+            <h5>Pricing</h5>
+            <p>Flat-Rate Company Pricing</p>
+        </a>
+        <a href="https://www.opendesign.com/pricing/plan-calculator">
+            <i>
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
+                    <path d="M19.5953 4.16736V37.5004M2.92871 20.8347H36.2617M8.05806 12.5006H14.4683M25.3631 12.5006H30.4912M25.3631 26.6033H30.4912M25.3631 31.7319H30.4912M11.2612 9.29517V15.7054M8.54269 26.4494L13.9785 31.8852M13.9785 26.4494L8.54269 31.8852M31.1336 4.16736H8.05687C5.22466 4.16736 2.92871 6.46331 2.92871 9.29551V32.3722C2.92871 35.2045 5.22466 37.5004 8.05687 37.5004H31.1336C33.9658 37.5004 36.2617 35.2045 36.2617 32.3722V9.29551C36.2617 6.46331 33.9658 4.16736 31.1336 4.16736Z" stroke="#FF2F00" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </i>
+            <h5>Calculator</h5>
+            <p>Find Your Ideal Membership</p>
+        </a>
+            </nav>
+</div>
+                            </li>
+                                            </ul>
+                            </li>
+                                <li class="nav-item active-trail dropdown">
+                                                                <a href="/guestfiles" class="nav-link dropdown-toggle" role="button" aria-haspopup="true" aria-expanded="false" onclick="return false" data-drupal-link-system-path="node/795">                    Membership
+                    <svg class='caret' width='7' height='12' viewBox='0 0 7 12' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M1 1L6 6L1 11' stroke-linecap='round' stroke-linejoin='round'/></svg>                </a>
+                                    <ul class="dropdown-menu">
+                                                    <li class="nav-item">
+                                <div class="container">
+    <nav class="main-menu-membership">
+        <a href="https://www.opendesign.com/oda-membership">
+            <i>
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
+                    <path d="M21.3517 4.17629L25.6129 12.7791C25.7098 12.9975 25.8623 13.1866 26.0551 13.3277C26.2479 13.4687 26.4743 13.5568 26.7117 13.5831L36.1184 14.9767C36.391 15.0117 36.6477 15.1235 36.8589 15.299C37.0701 15.4745 37.2272 15.7065 37.3113 15.9678C37.3957 16.2292 37.4038 16.5091 37.3349 16.7749C37.2663 17.0408 37.1232 17.2815 36.9224 17.4691L30.142 24.1959C29.9692 24.3576 29.8392 24.56 29.7644 24.7847C29.6894 25.0093 29.672 25.2492 29.7132 25.4823L31.348 34.9426C31.3955 35.2147 31.3655 35.4942 31.2617 35.7498C31.158 36.0055 30.9846 36.2269 30.7611 36.389C30.5379 36.5509 30.2733 36.6468 29.9981 36.6661C29.7229 36.6852 29.4476 36.6267 29.204 36.497L20.7353 32.0214C20.5185 31.915 20.2801 31.8598 20.0385 31.8598C19.7969 31.8598 19.5586 31.915 19.3417 32.0214L10.8729 36.497C10.6292 36.6267 10.3541 36.6852 10.0789 36.6661C9.80361 36.6468 9.53923 36.5509 9.31585 36.389C9.09244 36.2269 8.91899 36.0055 8.81522 35.7498C8.71148 35.4942 8.68155 35.2147 8.72887 34.9426L10.3637 25.3751C10.4051 25.142 10.3876 24.9021 10.3127 24.6775C10.2378 24.4528 10.1079 24.2504 9.93488 24.0887L3.07407 17.4691C2.8711 17.2764 2.72835 17.029 2.66313 16.7568C2.59791 16.4846 2.61302 16.1994 2.70661 15.9356C2.80021 15.6718 2.96828 15.4409 3.19047 15.2707C3.41266 15.1005 3.67943 14.9984 3.95847 14.9767L13.3653 13.5831C13.6027 13.5568 13.8291 13.4687 14.0219 13.3277C14.2147 13.1866 14.3672 12.9975 14.4641 12.7791L18.7253 4.17629C18.8413 3.92573 19.0266 3.7136 19.2593 3.56494C19.492 3.41627 19.7624 3.33728 20.0385 3.33728C20.3146 3.33728 20.585 3.41627 20.8177 3.56494C21.0504 3.7136 21.2357 3.92573 21.3517 4.17629Z" stroke="#FF2F00" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </i>
+            <h5>ODA Membership & Product Overview</h5>
+            <p>Membership levels</p>
+        </a>
+        <a href="https://www.opendesign.com/sig">
+            <i>
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
+                    <path d="M16.5945 22.7847C16.1185 22.3086 15.6918 21.8019 15.3145 21.2709C12.0517 16.6795 12.4784 10.271 16.5945 6.15489C21.1867 1.56271 28.6321 1.56271 33.2243 6.15489C37.3436 10.2742 37.7678 16.6894 34.4968 21.2815C34.1214 21.8087 33.6972 22.3118 33.2243 22.7847" stroke="#FF2F00" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M23.5947 15.7087C24.0707 16.1848 24.4974 16.6915 24.8747 17.2225C28.1375 21.8139 27.7108 28.2224 23.5947 32.3385C19.0025 36.9307 11.5571 36.9307 6.96489 32.3385C2.84558 28.2192 2.4214 21.804 5.69236 17.2119C6.06785 16.6847 6.49202 16.1816 6.96489 15.7087" stroke="#FF2F00" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </i>
+            <h5>Strategic Interoperability Group</h5>
+            <p>Member-Initiated Projects</p>
+        </a>
+        <a href="https://www.opendesign.com/core-package">
+            <i>
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
+                    <path d="M20.1199 22.4007L11.423 18.6735L2.72607 22.4007V32.34L11.423 36.0672M20.1199 22.4007V32.34M20.1199 22.4007L28.8176 18.6735L37.5147 22.4007V32.34L28.8176 36.0672L20.1199 32.34M20.1199 32.34L11.423 36.0672M11.423 36.0672L11.4234 26.1117M2.72607 22.3812L11.423 26.1084L20.1199 22.3812L28.8176 26.1084L37.5147 22.3812M11.4234 8.80011L20.1204 12.5274M20.1204 12.5274L28.8173 8.80011M20.1204 12.5274L20.1208 22.4831M28.8208 26.1117V36.0669M11.4288 18.6665V8.72712L20.1257 4.99988L28.8227 8.72712V18.6665L20.1257 22.3937L11.4288 18.6665Z" stroke="#FF2F00" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </i>
+            <h5>Core SDKs Package</h5>
+            <p>Key ODA Product Bundle</p>
+        </a>
+        <a href="/member-showcase">
+            <i>
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
+                    <path d="M10.6186 20.8339H28.5679M10.6186 28.5267H28.5679M33.696 11.8587H5.48997C4.07381 11.8587 2.92578 13.0067 2.92578 14.4229V34.9363C2.92578 36.3525 4.07381 37.5005 5.48997 37.5005H33.696C35.1122 37.5005 36.2602 36.3525 36.2602 34.9363V14.4229C36.2602 13.0067 35.1122 11.8587 33.696 11.8587ZM14.4644 4.16663H24.7212C25.4012 4.16663 26.0534 4.43678 26.5343 4.91766C27.0152 5.39854 27.2853 6.05074 27.2853 6.73081V11.8592H11.9002V6.73081C11.9002 6.05074 12.1704 5.39854 12.6512 4.91766C13.1321 4.43678 13.7843 4.16663 14.4644 4.16663Z" stroke="#FF2F00" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </i>
+            <h5>Members</h5>
+            <p>Explore Member Case Studies</p>
+        </a>
+        <a href="https://www.opendesign.com/educational-membership">
+            <i>
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
+                    <path d="M9.9872 15.1745L10.0054 23.8191C10.0054 23.8191 13.0329 27.8256 20.0037 27.8256C26.9744 27.8256 30.0182 23.8191 30.0182 23.8191L30.0162 15.1745M5.03916 29.6549V13.0366M20.0046 3.60486L38.3421 11.5501L20.0046 19.4952L1.66705 11.5501L20.0046 3.60486ZM5.04093 36.4029C6.9043 36.4029 8.41486 34.8925 8.41486 33.0291C8.41486 31.1657 6.9043 29.655 5.04093 29.655C3.17755 29.655 1.66699 31.1657 1.66699 33.0291C1.66699 34.8925 3.17755 36.4029 5.04093 36.4029Z" stroke="#FF2F00" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </i>
+            <h5>Educational membership</h5>
+            <p>For qualified universities</p>
+        </a>
+        <a href="https://www.opendesign.com/about">
+            <i>
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
+                    <path d="M25.8894 10.8088C24.1713 9.61166 22.0566 8.88006 19.7437 8.88006C16.6223 8.88006 13.8693 10.1779 11.84 12.2971H2.00262C4.96776 5.37474 11.8399 0.5 19.8098 0.5C30.4492 0.5 39.1721 9.27912 39.04 19.987C39.04 30.6948 30.3831 39.4739 19.6777 39.4739C11.3756 39.4739 4.23758 34.2024 1.52586 26.7494H11.0069C13.0625 29.4025 16.2164 31.0939 19.7437 31.0939C21.9905 31.0939 24.1052 30.3623 25.8894 29.1651C28.8632 27.2364 30.7796 23.8445 30.7796 19.987C30.7796 16.196 28.8632 12.8041 25.8894 10.8088Z" stroke="#FF2F00" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M0.513867 17.7922C0.633942 16.9462 0.75401 16.0454 0.973193 15.1894H9.90703C9.49072 16.097 9.20957 17.0904 9.02484 18.0915H0.513867V17.7922Z" stroke="#FF2F00" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M0.765329 23.8291C0.622212 23.271 0.565191 22.7407 0.513867 22.1153L0.5 21.0285H8.92802C9.01055 22.0073 9.2243 22.9409 9.5321 23.8291H0.765329Z" stroke="#FF2F00" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </i>
+            <h5>About ODA</h5>
+            <p>Our Mission and Business Model</p>
+        </a>
+            </nav>
+</div>
+                            </li>
+                                            </ul>
+                            </li>
+                                <li class="nav-item">
+                                                                <a href="/source-code" class="nav-link" data-drupal-link-system-path="node/4210">                    Source code
+                                    </a>
+                            </li>
+                                <li class="nav-item dropdown">
+                                                                <a href="/blog" class="nav-link dropdown-toggle" role="button" aria-haspopup="true" aria-expanded="false" onclick="return false" data-drupal-link-system-path="blog">                    Support
+                    <svg class='caret' width='7' height='12' viewBox='0 0 7 12' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M1 1L6 6L1 11' stroke-linecap='round' stroke-linejoin='round'/></svg>                </a>
+                                    <ul class="dropdown-menu">
+                                                    <li class="nav-item">
+                                <div class="container">
+    <nav class="main-menu-support">
+        <a href="https://www.opendesign.com/support">
+            <i>
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
+                    <path d="M17.3284 28.7826L14.6334 35.5201M22.7183 28.7826L25.4133 35.5201M11.9384 35.5201H28.1083M36.1933 4.52759H3.85336C3.10916 4.52759 2.50586 5.13089 2.50586 5.87509V27.4351C2.50586 28.1792 3.10916 28.7826 3.85336 28.7826H36.1933C36.9374 28.7826 37.5408 28.1792 37.5408 27.4351V5.87509C37.5408 5.13089 36.9374 4.52759 36.1933 4.52759Z" stroke="#FF2F00" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M17.8641 10.7192L18.3886 9.36518C18.4771 9.13593 18.6327 8.93873 18.8351 8.79943C19.0376 8.66012 19.2774 8.5852 19.5231 8.58447H20.5234C20.7691 8.5852 21.0089 8.66012 21.2113 8.79943C21.4138 8.93873 21.5694 9.13593 21.6578 9.36518L22.1824 10.7192L23.9633 11.7439L25.4028 11.5243C25.6425 11.4918 25.8865 11.5313 26.1037 11.6377C26.3208 11.7441 26.5015 11.9127 26.6226 12.1221L27.1106 12.976C27.2356 13.1887 27.2933 13.4343 27.2759 13.6804C27.2584 13.9264 27.1668 14.1615 27.013 14.3544L26.1225 15.4889V17.5383L27.0374 18.6727C27.1912 18.8657 27.2828 19.1007 27.3003 19.3468C27.3177 19.5929 27.26 19.8385 27.135 20.0512L26.647 20.9051C26.5259 21.1144 26.3452 21.283 26.1281 21.3895C25.9109 21.4959 25.6669 21.5354 25.4272 21.5028L23.9877 21.2832L22.2068 22.3079L21.6822 23.662C21.5938 23.8912 21.4381 24.0884 21.2357 24.2278C21.0333 24.3671 20.7935 24.442 20.5478 24.4427H19.5231C19.2774 24.442 19.0376 24.3671 18.8351 24.2278C18.6327 24.0884 18.4771 23.8912 18.3886 23.662L17.8641 22.3079L16.0831 21.2832L14.6436 21.5028C14.404 21.5354 14.16 21.4959 13.9428 21.3895C13.7256 21.283 13.5449 21.1144 13.4238 20.9051L12.9358 20.0512C12.8108 19.8385 12.7532 19.5929 12.7706 19.3468C12.788 19.1007 12.8797 18.8657 13.0334 18.6727L13.9239 17.5383V15.4889L13.009 14.3544C12.8553 14.1615 12.7636 13.9264 12.7462 13.6804C12.7288 13.4343 12.7864 13.1887 12.9114 12.976L13.3994 12.1221C13.5205 11.9127 13.7012 11.7441 13.9184 11.6377C14.1356 11.5313 14.3796 11.4918 14.6192 11.5243L16.0587 11.7439L17.8641 10.7192ZM17.5835 16.5136C17.5835 16.9961 17.7266 17.4678 17.9947 17.869C18.2628 18.2702 18.6438 18.5829 19.0896 18.7676C19.5354 18.9522 20.0259 19.0006 20.4992 18.9064C20.9725 18.8123 21.4072 18.5799 21.7484 18.2387C22.0896 17.8975 22.3219 17.4628 22.4161 16.9896C22.5102 16.5163 22.4619 16.0257 22.2772 15.5799C22.0926 15.1341 21.7799 14.7531 21.3787 14.485C20.9775 14.2169 20.5058 14.0739 20.0232 14.0739C19.3762 14.0739 18.7556 14.3309 18.2981 14.7884C17.8406 15.246 17.5835 15.8665 17.5835 16.5136Z" stroke="#FF2F00" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </i>
+            <h5>Support Platform</h5>
+            <p>Explore our support resources and get in touch  with Support and Sales Teams</p>
+        </a>
+        <a href="https://www.opendesign.com/consulting-service">
+            <i>
+                <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40" fill="none">
+                    <path d="M27.3319 8.47714C25.6052 6.2799 23.2363 4.67576 20.5551 3.88805C17.8738 3.10035 15.0137 3.16829 12.3729 4.08242C9.73209 4.99655 7.44206 6.71136 5.82158 8.98812C4.20112 11.2648 3.33091 13.9902 3.33209 16.7848C3.32414 19.4412 4.10986 22.0394 5.58848 24.2463L3.33209 30.2461L8.76794 29.2718M25.7668 14.8613C28.657 14.8613 31.4288 16.0094 33.4723 18.053C35.5159 20.0967 36.6641 22.8685 36.6641 25.7586C36.671 27.9037 36.0369 30.0019 34.8436 31.7842L36.6641 36.656L30.536 35.5534C29.0621 36.2721 27.4452 36.6491 25.8055 36.656C24.1659 36.6629 22.5458 36.2996 21.066 35.5934C19.5862 34.8873 18.2848 33.856 17.2589 32.577C16.2329 31.2981 15.5089 29.804 15.1406 28.206C14.7723 26.6083 14.7694 24.948 15.132 23.3489C15.4945 21.7498 16.2133 20.2532 17.2347 18.9705C18.2561 17.6878 19.5537 16.6521 21.031 15.9406C22.5083 15.2291 24.1271 14.8602 25.7668 14.8613Z" stroke="#FF2F00" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </i>
+            <h5>Consulting Services</h5>
+            <p>Fast-track your project with help from the ODA team</p>
+        </a>
+            </nav>
+</div>
+                            </li>
+                                            </ul>
+                            </li>
+                <li class="nav-item">
+        <a href="https://devconnect.opendesign.com/" class="nav-link devconnect-link" target="_blank">DevConnect</a>
+    </li>
+        </ul>
+<ul class="navbar-nav">
+    <li class="nav-item">
+        <a class="nav-link trial" href="https://www.opendesign.com/free-trial">Free trial</a>
+    </li>
+
+            <li class="nav-item">
+            <a class="nav-link auth" href="/user/login">Sign In</a>
+        </li>
+    </ul>
+<ul class="navbar-nav" data-sm-skip="true">
+                    <li class="dropdown nav-item language-switcher">
+            <a href="#" class="nav-link" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false" title="Language">
+                en
+            </a>
+            <ul class="dropdown-menu">
+                
+                    
+                    <li class="nav-item">
+                        <a class="nav-link active"
+                           href="/language/select/en?destination=/guestfiles/oda_file_converter"
+                           hreflang="en"
+                           title="English">
+                            English
+                        </a>
+                    </li>
+
+                
+                    
+                    <li class="nav-item">
+                        <a class="nav-link "
+                           href="/language/select/ja?destination=/ja/guestfiles/oda_file_converter"
+                           hreflang="ja"
+                           title="Japanese">
+                            日本語
+                        </a>
+                    </li>
+
+                
+                    
+                    <li class="nav-item">
+                        <a class="nav-link "
+                           href="/language/select/zh-hans?destination=/cn/guestfiles/oda_file_converter"
+                           hreflang="zh-hans"
+                           title="Chinese, Simplified">
+                            中文(简体)
+                        </a>
+                    </li>
+
+                            </ul>
+        </li>
+        <li class="nav-item">
+        <a class="nav-link schedule" href="#" onclick="openContactModal(); return false;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="19" viewBox="0 0 18 19" fill="none">
+                <path d="M15.75 11.75C15.75 12.1478 15.592 12.5294 15.3107 12.8107C15.0294 13.092 14.6478 13.25 14.25 13.25H5.25L2.25 16.25V4.25C2.25 3.85218 2.40804 3.47064 2.68934 3.18934C2.97064 2.90804 3.35218 2.75 3.75 2.75H14.25C14.6478 2.75 15.0294 2.90804 15.3107 3.18934C15.592 3.47064 15.75 3.85218 15.75 4.25V11.75Z" stroke="white" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link search" href="https://www.opendesign.com/support">
+            <svg width="18" height="19" viewBox="0 0 18 19" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M15.75 16.25L12.4875 12.9875M14.25 8.75C14.25 12.0637 11.5637 14.75 8.25 14.75C4.93629 14.75 2.25 12.0637 2.25 8.75C2.25 5.43629 4.93629 2.75 8.25 2.75C11.5637 2.75 14.25 5.43629 14.25 8.75Z" stroke="white" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </a>
+    </li>
+</ul>
+
+
+            </div>
+        </div>
+    </nav>
+                <div class="banner banner-header banner-devconnect mcp-2026" data-header-banner-id="devconnect-2026-mcp">
+        
+                                        <div class="container">
+            <h2
+                data-frame-1="Connect AI to your&amp;nbsp;&lt;br class=&quot;d-xl-none&quot;&gt;&lt;span&gt;DWG&lt;/span&gt;"
+                data-frame-2="Connect AI to your&amp;nbsp;&lt;br class=&quot;d-xl-none&quot;&gt;&lt;span&gt;IFC&lt;/span&gt;"
+                data-frame-3="Connect AI to your&amp;nbsp;&lt;br class=&quot;d-xl-none&quot;&gt;&lt;span&gt;STEP&lt;/span&gt;"
+                data-frame-4="Connect AI to your&amp;nbsp;&lt;br class=&quot;d-xl-none&quot;&gt;&lt;span&gt;engineering&lt;/span&gt;"
+            >Connect AI to your&nbsp;<br class="d-xl-none"><span>engineering</span>&nbsp;<span>data</span></h2>
+            <a href="https://devconnect.opendesign.com/?utm_source=website&utm_medium=top_banner&utm_campaign=devconnect_announce" target="_blank">
+                <span>DevConnect</span>
+                <i></i>
+                <span>
+                    <strong>
+                                                    November 18<sup>th</sup>
+                                            </strong>
+                </span>
+                <i></i>
+                <svg xmlns="http://www.w3.org/2000/svg" width="31" height="12" viewBox="0 0 31 12" fill="none">
+                    <path d="M0.75 4.77298C0.335786 4.77298 -3.62117e-08 5.10877 0 5.52298C3.62117e-08 5.93719 0.335786 6.27298 0.75 6.27298L0.75 5.52298L0.75 4.77298ZM30.2803 6.05331C30.5732 5.76041 30.5732 5.28554 30.2803 4.99265L25.5074 0.219677C25.2145 -0.0732167 24.7396 -0.0732166 24.4467 0.219677C24.1538 0.51257 24.1538 0.987444 24.4467 1.28034L28.6893 5.52298L24.4467 9.76562C24.1538 10.0585 24.1538 10.5334 24.4467 10.8263C24.7396 11.1192 25.2145 11.1192 25.5074 10.8263L30.2803 6.05331ZM0.75 5.52298L0.75 6.27298L29.75 6.27298L29.75 5.52298L29.75 4.77298L0.75 4.77298L0.75 5.52298Z" fill="#1A1A1A"/>
+                </svg>
+            </a>
+            <button type="button" class="close" aria-label="Close">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <path fill-rule="evenodd" clip-rule="evenodd" d="M12.2929 0.292893C12.6834 -0.0976311 13.3164 -0.0976311 13.707 0.292893C14.0975 0.683417 14.0975 1.31643 13.707 1.70696L8.41399 6.99992L13.707 12.2929C14.0975 12.6834 14.0975 13.3164 13.707 13.707C13.3164 14.0975 12.6834 14.0975 12.2929 13.707L6.99992 8.41399L1.70696 13.707C1.31643 14.0975 0.683417 14.0975 0.292893 13.707C-0.0976311 13.3164 -0.0976311 12.6834 0.292893 12.2929L5.58586 6.99992L0.292893 1.70696C-0.0976311 1.31643 -0.0976311 0.683417 0.292893 0.292893C0.683417 -0.0976311 1.31643 -0.0976311 1.70696 0.292893L6.99992 5.58586L12.2929 0.292893Z" fill="#E6E6E6"/>
+                </svg>
+            </button>
+        </div>
+    </div>
+</header>
+
+
+
+    <div class="content content-guestfiles-oda_file_converter" role="main">
+        <div data-drupal-messages-fallback class="hidden"></div>
+
+
+<section class="section-top" id="top">
+    <svg
+            viewBox="0 0 451 452"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            class="orange-circle"
+    >
+        <circle
+                opacity="0.6"
+                cx="225.5"
+                cy="225.5"
+                r="224.5"
+                transform="matrix(0 1 1 -0.00064735 0 0.291992)"
+                stroke="#FFC0B2"
+                stroke-width="2"
+        />
+    </svg>
+
+    <div class="container auto-stagger">
+        <h1>ODA <span>DWG-DXF</span> CONVERTER</h1>
+        <div class="subheadline">
+            <svg
+                    width="32"
+                    height="32"
+                    viewBox="0 0 32 32"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+            >
+                <g clip-path="url(#clip0_2037_1732)">
+                    <path
+                            d="M1.33325 26.6667V18.6667M1.33325 18.6667H9.33325M1.33325 18.6667L7.51992 24.48C8.95291 25.9137 10.7257 26.9611 12.673 27.5243C14.6202 28.0876 16.6784 28.1483 18.6555 27.701C20.6326 27.2537 22.4642 26.3128 23.9793 24.9661C25.4944 23.6195 26.6437 21.911 27.3199 20M30.6666 5.33335V13.3334M30.6666 13.3334H22.6666M30.6666 13.3334L24.4799 7.52002C23.0469 6.0863 21.2741 5.03896 19.3268 4.47572C17.3796 3.91247 15.3214 3.85169 13.3443 4.29903C11.3672 4.74637 9.53565 5.68726 8.02054 7.03391C6.50543 8.38056 5.35614 10.0891 4.67992 12"
+                            stroke="#1A1A1A"
+                            stroke-width="2"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                    />
+                </g>
+                <defs>
+                    <clippath id="clip0_2037_1732">
+                        <rect width="32" height="32" fill="white" />
+                    </clippath>
+                </defs>
+            </svg>
+
+            <p>For converting between different versions of .dwg and .dxf</p>
+        </div>
+    </div>
+</section>
+
+<section class="section-downloads" id="downloads">
+    <div class="container">
+        <h2 class="auto-show">Downloads</h2>
+        <div class="downloads auto-show">
+            <div class="linux auto-show">
+                <svg
+                        width="44"
+                        height="44"
+                        viewBox="0 0 44 44"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                >
+                    <path
+                            d="M10.0959 29.1692C10.1574 28.9644 10.1369 28.7699 10.1266 28.5753C10.0754 27.664 10.1984 26.7835 10.4239 25.9029C10.7929 24.4182 11.4284 23.0462 12.1972 21.7151C12.7815 20.7116 13.4376 19.7594 14.1551 18.8378C14.6574 18.1928 15.2109 17.5886 15.6619 16.9128C16.0925 16.278 16.3897 15.5715 16.605 14.824C17.0458 13.3394 17.0253 11.8137 16.9843 10.2881C16.9535 9.30509 16.9228 8.32212 17.015 7.33916C17.1175 6.23332 17.4353 5.18892 18.0503 4.25714C18.4398 3.65303 18.9729 3.19226 19.5879 2.84413C20.982 2.06595 22.4991 1.88164 24.0572 2.06595C24.8567 2.1581 25.6255 2.40384 26.3123 2.84413C27.1323 3.35609 27.7064 4.07284 28.1164 4.93293C28.4854 5.71112 28.6904 6.53026 28.8339 7.36987C29.0185 8.52691 29.0492 9.68394 29.0185 10.8512C28.9877 11.8035 28.9775 12.7455 29.1825 13.6875C29.3362 14.394 29.572 15.08 29.941 15.6944C30.5458 16.7081 31.2736 17.6296 32.0014 18.5614C32.6984 19.4522 33.3545 20.3635 33.908 21.3567C34.359 22.1553 34.7485 22.9847 35.0561 23.8448C35.4968 25.0735 35.7326 26.3432 35.6813 27.6436C35.6608 28.2272 35.5891 28.8211 35.4148 29.3842C35.3738 29.5071 35.3533 29.6402 35.3226 29.7324C35.3636 29.8962 35.4763 29.9679 35.5891 30.0396C36.1631 30.4184 36.4194 30.9918 36.5629 31.6266C36.5731 31.6778 36.5834 31.7188 36.5834 31.77C36.7474 32.5584 36.9832 33.3161 37.5162 33.9509C37.7212 34.1967 37.8852 34.4936 38.0492 34.7701C38.5413 35.579 38.408 36.3879 37.711 37.0227C37.4752 37.2377 37.2087 37.3913 36.9422 37.5347C36.3066 37.8623 35.6711 38.2105 35.0253 38.5279C34.277 38.8965 33.6517 39.4187 33.1187 40.0433C32.5549 40.6986 31.8886 41.2208 31.0993 41.5689C30.4535 41.8556 29.7668 42.0707 29.0492 41.9785C28.1369 41.8556 27.3066 41.5177 26.7531 40.7191C26.5993 40.4938 26.4148 40.2686 26.3431 39.9921C26.3021 39.859 26.2303 39.7566 26.056 39.6542C25.7895 39.6235 25.4615 39.562 25.1335 39.5416C24.5492 39.5006 23.9547 39.4597 23.3806 39.347C22.5196 39.173 21.6483 39.2242 20.7872 39.3675C20.1517 39.4699 19.5264 39.562 18.8909 39.6542C18.5834 39.6952 18.3271 39.8078 18.1426 40.074C17.2918 41.2822 16.0617 41.5587 14.7086 41.3846C13.7963 41.2618 12.9353 40.9648 12.1152 40.5245C11.2542 40.0638 10.3111 39.8283 9.34757 39.7361C8.68128 39.6747 8.02525 39.5313 7.35896 39.4289C7.03094 39.3777 6.72342 39.2549 6.44666 39.0706C5.94438 38.7429 5.66761 38.2924 5.65736 37.6883C5.64711 37.3606 5.70861 37.0432 5.81112 36.7258C6.04688 35.9988 6.14939 35.2718 5.99563 34.5039C5.90337 34.0533 5.91362 33.5926 5.93413 33.1318C5.94438 32.8349 6.03663 32.5584 6.20064 32.3024C6.45691 31.8826 6.81568 31.5857 7.2667 31.4014C7.60497 31.2683 7.93299 31.1352 8.27126 31.0123C8.58903 30.8997 8.84529 30.7051 9.05031 30.4389C9.39883 30.0498 9.7371 29.63 10.0959 29.1692ZM17.0765 35.2411C17.179 35.538 17.3635 35.7326 17.507 35.9476C17.7018 36.2548 17.9376 36.521 18.2553 36.7155C19.6699 37.6268 21.2178 37.9238 22.8579 37.6678C24.0059 37.4937 25.0515 37.0637 26.0663 36.5005C26.6506 36.1729 26.9478 35.7121 27.0606 35.0773C27.1836 34.4117 27.2656 33.7564 27.3169 33.0806C27.3681 32.4458 27.4296 31.8109 27.5321 31.1761C27.6244 30.572 27.8396 30.0088 28.1779 29.4969C28.3624 29.2102 28.6494 29.0463 28.916 28.862C29.1415 28.7085 29.3157 28.5344 29.3875 28.2579C29.449 28.0019 29.5822 27.7767 29.7155 27.5821C30.228 27.1521 30.7713 27.1111 31.3658 27.275C32.0629 27.4695 32.7189 27.7664 33.3237 28.176C33.7337 28.4525 34.0823 28.8006 34.1643 29.333C34.1745 29.374 34.2258 29.4047 34.277 29.4559C34.4718 29.1692 34.4205 28.8825 34.3283 28.6061C34.1335 28.0122 33.7747 27.5309 33.2725 27.1623C32.5139 26.5992 31.6426 26.3534 30.7303 26.2203C30.597 26.1998 30.474 26.1998 30.3408 26.1179C30.1665 25.9234 30.1255 25.6572 30.0845 25.4012C29.9103 24.4387 29.572 23.5479 29.162 22.6673C28.7519 21.797 28.3419 20.9266 27.9421 20.0461C27.7064 19.5239 27.4911 18.9914 27.2759 18.4692C26.8761 17.517 26.5276 16.5545 26.2508 15.5613C26.1483 15.1927 26.015 14.8343 25.8818 14.435C25.5845 14.6193 25.318 14.7831 25.0515 14.9367C24.7235 15.121 24.3852 15.2746 24.0469 15.4486C23.5344 15.7046 23.0629 16.0323 22.5298 16.2575C22.2121 16.3906 21.884 16.4828 21.5355 16.493C20.982 16.5033 20.4695 16.3599 19.9877 16.0937C19.5162 15.8275 19.0856 15.4998 18.6756 15.1517C18.5731 15.0698 18.4809 14.9572 18.3168 15.0698C18.3066 15.121 18.2758 15.1824 18.2656 15.2439C18.1118 16.1961 17.8453 17.1279 17.4763 18.0187C17.0458 19.0836 16.482 20.0768 15.9592 21.1007C15.3647 22.268 14.7496 23.4148 14.3499 24.6742C13.9501 25.9131 13.8476 27.1726 14.0936 28.4525C14.1961 29.0156 14.4319 29.5071 14.8931 29.8757C15.2519 30.1624 15.6107 30.4491 15.9695 30.7256C16.7588 31.3297 17.4558 32.0055 17.9376 32.8861C18.2861 33.5107 18.3271 34.1148 17.9581 34.7291C17.7531 35.0465 17.3533 35.0056 17.0765 35.2411ZM7.01044 37.7907C7.23595 38.1798 7.57422 38.3333 7.95349 38.4153C8.33276 38.4972 8.72229 38.5791 9.11181 38.62C10.3931 38.7532 11.6232 39.0194 12.7815 39.6235C13.4581 39.9819 14.2166 40.1866 15.0059 40.1866C15.5082 40.1866 15.99 40.115 16.4205 39.8487C16.9945 39.4904 17.343 38.9887 17.3738 38.2924C17.3943 37.6985 17.1893 37.1763 16.892 36.6746C16.4922 35.9988 15.9797 35.3947 15.5184 34.7598C15.0879 34.166 14.6574 33.5619 14.3601 32.8861C14.0526 32.2 13.7348 31.5242 13.3043 30.8997C13.0378 30.5106 12.7098 30.2034 12.2997 29.9884C11.7872 29.7324 11.2952 29.7631 10.8339 30.1215C10.5776 30.3263 10.3726 30.5822 10.1881 30.8485C9.94211 31.1966 9.70634 31.555 9.32707 31.77C9.05031 31.9338 8.75304 32.0772 8.43527 32.1796C8.26101 32.2308 8.097 32.3024 7.93299 32.3741C7.56397 32.5379 7.34871 32.8144 7.2257 33.2035C7.13345 33.5209 7.1642 33.8178 7.19495 34.125C7.29745 34.9442 7.34871 35.7428 7.08219 36.5517C6.94893 36.951 6.89768 37.3708 7.01044 37.7907ZM29.531 30.1215C29.326 30.0907 29.2337 30.2443 29.1415 30.3672C28.875 30.7051 28.7007 31.1044 28.6289 31.5242C28.5367 32.0669 28.4444 32.6198 28.4137 33.1728C28.3419 34.3093 28.1267 35.4049 27.7576 36.48C27.4809 37.2889 27.3374 38.1286 27.4296 38.9887C27.4501 39.1832 27.4706 39.3777 27.5731 39.5518C28.2087 40.6269 29.162 40.842 30.023 40.6986C30.5663 40.6064 31.0481 40.3709 31.5094 40.0945C32.0116 39.7976 32.4012 39.3777 32.8009 38.9682C33.1495 38.62 33.4877 38.2617 33.908 38.0057C34.4205 37.6883 34.9433 37.3811 35.4968 37.1353C35.9274 36.9408 36.3579 36.7258 36.7167 36.4186C37.1164 36.0807 37.1882 35.7121 36.9934 35.2411C36.8602 34.9134 36.6347 34.6575 36.4296 34.381C36.0811 33.9305 35.8351 33.4492 35.7428 32.8861C35.6608 32.4048 35.5276 31.9338 35.3226 31.4935C34.6358 30.7563 33.8977 30.6949 33.0982 31.2785C32.9649 31.3707 32.8317 31.473 32.6984 31.5652C32.2782 31.8826 31.7964 32.0362 31.2838 32.0464C30.9456 32.0567 30.6483 31.9543 30.3818 31.729C30.0025 31.4219 29.8283 31.0123 29.695 30.572C29.654 30.4184 29.6642 30.2443 29.531 30.1215ZM21.4843 15.9606C21.8635 15.9299 22.2941 15.7763 22.6938 15.551C23.2679 15.2131 23.8727 14.9162 24.4877 14.6397C24.8977 14.4554 25.236 14.1687 25.482 13.7899C25.7383 13.411 25.6973 13.0015 25.3692 12.6738C25.195 12.4997 25.0002 12.3666 24.7645 12.2642C24.2827 12.0697 23.7907 11.8854 23.3294 11.6396C22.9296 11.4246 22.5093 11.2301 22.0788 11.0765C21.4023 10.8512 20.7872 10.9331 20.2132 11.3427C19.8442 11.6089 19.4649 11.8649 19.1061 12.1516C18.8089 12.3871 18.4809 12.5816 18.2246 12.8479C18.0093 13.0731 17.9581 13.3189 18.0503 13.6158C18.1426 13.8923 18.3168 14.0971 18.5424 14.2711C19.0754 14.7012 19.6084 15.1312 20.1722 15.5306C20.5105 15.7968 20.941 15.9504 21.4843 15.9606ZM25.2565 11.8342C25.5743 11.6601 25.6255 11.3325 25.7075 11.0458C26.015 10.0014 25.8613 9.04911 25.1847 8.17877C25.0002 7.95351 24.7747 7.8204 24.4979 7.72825C23.6984 7.46203 22.4786 7.93303 22.2018 9.04911C22.1096 9.39724 22.0686 9.75562 22.0583 10.114C22.0583 10.2266 22.0481 10.3393 22.1403 10.4519C22.3248 10.5338 22.4991 10.7079 22.7246 10.6771C22.8681 10.5645 22.8681 10.4212 22.8886 10.2983C22.9194 10.0321 23.0116 9.78633 23.1244 9.55083C23.3499 9.09007 23.8009 8.9672 24.2314 9.24365C24.4467 9.37676 24.5902 9.57131 24.6517 9.81705C24.7747 10.2778 24.7132 10.7283 24.6005 11.1686C24.5697 11.312 24.4877 11.4451 24.6005 11.6294C24.8157 11.6908 25.0002 11.8751 25.2565 11.8342ZM19.8749 10.8103C20.1927 10.7386 20.3875 10.6157 20.5002 10.4007C20.5925 9.95016 20.5002 9.53035 20.3772 9.12078C20.2747 8.81361 20.1107 8.51667 19.8647 8.30164C19.3214 7.8204 18.6039 7.92279 18.2348 8.54739C18.1631 8.67026 18.0913 8.80337 18.0401 8.94672C17.6301 9.92968 17.7736 10.8615 18.2348 11.7216C18.4501 11.8547 18.6039 11.8547 18.7269 11.7011C18.7781 11.3939 18.7576 11.3939 18.6551 11.1379C18.4296 10.544 18.3783 9.9604 18.8089 9.45868C19.0036 9.36653 19.1574 9.34605 19.3214 9.4382C19.6904 9.79657 19.6904 10.3188 19.8749 10.8103Z"
+                            fill="#1A1A1A"
+                    />
+                </svg>
+                <div class="buttons">
+                    <a href="/guestfiles/get?filename=ODAFileConverter_QT6_lnxX64_11dll.rpm">RPM</a>
+                    <a href="/guestfiles/get?filename=ODAFileConverter_QT6_lnxX64_11dll.deb">DEB</a>
+                    <a href="/guestfiles/get?filename=ODAFileConverter_QT6_lnxX64_11dll.AppImage">AppImage</a>
+                </div>
+                <div class="description">
+                    <p>OpenSUSE11.2/Ubuntu 20.10 x64 or later. GLIBC version 2.28 or higher is required. <strong>Now Qt runtimes are integrated into the packages!</strong></p>
+
+                    <ul>
+                        <li>
+                            <p><strong>RPM packages:</strong></p>
+                            <p>Use system software to install, for example:</p>
+                            <code class="bold"
+                            >sudo yum localinstall --skip-broken
+                                ODAFileConverter_QT6_lnxX64_11dll_{version}.rpm</code
+                            >
+                            <p>Note that it is required to skip false broken dependecies (--nodeps option for rpm). When installing several products of the same version, it may require using console to force resolving conflicts</p>
+                            <code class="bold"
+                            >sudo rpm -i --replacefiles
+                                ODAFileConverter_QT6_lnxX64_11dll_{version}.rpm</code
+                            >
+                        </li>
+
+                        <li>
+                            <p><strong>DEB packages:</strong></p>
+                            <p>Use system software to install, for example:</p>
+                            <code class="bold">sudo gdebi ODAFileConverter_QT6_lnxX64_11dll_{version}.deb</code>
+                            <p class="u-mb-16">from the terminal command line. You may need superuser privileges to install.</p>
+                            <p>Modern Linux such as Ubuntu 22/Fedora37 also require to install/symlynk libxcb-util.so.0 library (they usually contain libxcb-util.so.1 now). It can be fixed quickly as following:</p>
+                            <code>cd /usr/lib/x86_64-linux-gnu (Ubuntu)</code>
+                            <p>or</p>
+                            <code>cd /usr/lib64 (Fedora)</code>
+                            <p>then</p>
+                            <code>sudo ln -s libxcb-util.so.1 libxcb-util.so.0</code>
+                        </li>
+
+                        <li>
+                            <p><strong>AppImage packages:</strong></p>
+                            <p>Runs as portable version of software from disk image. Does not require installation at all! However, fuse component must be installed (appears that Fedora already has it, On Ubuntu use</p>
+                            <code class="bold">sudo apt install fuse</code>
+                            <p>Using AppImage does not require any additional Linux components as well. The image contains everything.</p>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="mac-os auto-show">
+                <svg
+                        width="44"
+                        height="44"
+                        viewBox="0 0 44 44"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                >
+                    <g clip-path="url(#clip0_5_6390)">
+                        <path
+                                d="M36.482 15.9542C36.2616 16.1252 32.3704 18.3178 32.3704 23.1932C32.3704 28.8324 37.3218 30.8274 37.47 30.8768C37.4472 30.9984 36.6834 33.609 34.8594 36.269C33.233 38.6098 31.5344 40.9468 28.9504 40.9468C26.3664 40.9468 25.7014 39.4458 22.7184 39.4458C19.8114 39.4458 18.7778 40.9962 16.4142 40.9962C14.0506 40.9962 12.4014 38.8302 10.5052 36.1702C8.30878 33.0466 6.53418 28.194 6.53418 23.5884C6.53418 16.2012 11.3374 12.2834 16.0646 12.2834C18.5764 12.2834 20.6702 13.9326 22.2472 13.9326C23.7482 13.9326 26.089 12.1846 28.9466 12.1846C30.0296 12.1846 33.9208 12.2834 36.482 15.9542ZM27.59 9.0572C28.7718 7.655 29.6078 5.7094 29.6078 3.7638C29.6078 3.494 29.585 3.2204 29.5356 3C27.6128 3.0722 25.3252 4.2806 23.9458 5.8804C22.8628 7.1116 21.852 9.0572 21.852 11.0294C21.852 11.3258 21.9014 11.6222 21.9242 11.7172C22.0458 11.74 22.2434 11.7666 22.441 11.7666C24.1662 11.7666 26.336 10.6114 27.59 9.0572Z"
+                                fill="#1A1A1A"
+                        />
+                    </g>
+                    <defs>
+                        <clippath id="clip0_5_6390">
+                            <rect
+                                    width="30.932"
+                                    height="38"
+                                    fill="white"
+                                    transform="translate(6.53418 3)"
+                            />
+                        </clippath>
+                    </defs>
+                </svg>
+                <ul>
+                    <li>
+                        <div class="buttons">
+                            <a href="/guestfiles/get?filename=ODAFileConverter_QT6_macOsX_arm64_15.0dll.dmg">dmg</a>
+                            <a href="/guestfiles/get?filename=ODAFileConverter_QT6_macOsX_arm64_15.0dll.pkg">pkg</a>
+                        </div>
+                        <p>Mac OS X 13.0 <span class="bold">arm64</span> or later <span class="bold">(Apple Chip)</span></p>
+                    </li>
+
+                    <li>
+                        <div class="buttons">
+                            <a href="/guestfiles/get?filename=ODAFileConverter_QT6_macOsX_x64_15.0dll.dmg">dmg</a>
+                            <a href="/guestfiles/get?filename=ODAFileConverter_QT6_macOsX_x64_15.0dll.pkg">pkg</a>
+                        </div>
+                        <p>Mac OS X 13.0 <span class="bold">x64</span> or later <span class="bold">(Intel Chip)</span></p>
+                    </li>
+                </ul>
+            </div>
+
+            <div class="windows auto-show">
+                <svg
+                        width="44"
+                        height="44"
+                        viewBox="0 0 44 44"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                >
+                    <path
+                            d="M37.361 6.63892L21.9998 8.63773V21.2333H37.361V6.63892ZM20.5368 8.83609L6.63867 10.6442V21.2333H20.5368V8.83609ZM6.63867 22.7591V33.3407L20.5368 35.1488V22.7591H6.63867ZM21.9998 22.7591V35.3547L37.361 37.3612V22.7591H21.9998Z"
+                            fill="#1A1A1A"
+                    />
+                </svg>
+                <div class="buttons">
+                    <a href="/guestfiles/get?filename=ODAFileConverter_QT6_vc16_amd64dll.msi">Download</a>
+                </div>
+                <p>Windows 10 or later (x64)</p>
+            </div>
+        </div>
+
+        <div class="guide auto-show">
+            <p class="subheading">ODA File Converter application features a graphical interface and a command-line interface, and accepts the following inputs:</p>
+
+            <ul class="inputs">
+                <li>Source directory</li>
+                <li>Target directory</li>
+                <li>Input file filter such as *.dwg (default is "*.dwg;*.dxf")</li>
+                <li>Output version/type</li>
+                <li>Recursive flag</li>
+                <li>Audit flag</li>
+            </ul>
+
+            <div class="bottom">
+                <p class="subheading">Please note</p>
+
+                <div class="cards auto-stagger">
+                    <div>
+                        <svg
+                                width="24"
+                                height="24"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                xmlns="http://www.w3.org/2000/svg"
+                        >
+                            <path
+                                    d="M15.3865 11.156L12.0025 7.772M12.0025 7.772L8.61849 11.156M12.0025 7.772L12.0025 17.078M21.3083 21.3082C21.3083 21.7569 21.13 22.1873 20.8127 22.5046C20.4955 22.8218 20.065 23.0002 19.6163 23.0002H4.38829C3.93954 23.0002 3.50918 22.8218 3.19186 22.5046C2.87456 22.1873 2.69629 21.7569 2.69629 21.3082V2.69615C2.69629 2.2474 2.87456 1.81704 3.19186 1.49973C3.50918 1.18241 3.93954 1.00415 4.38829 1.00415H15.3863L21.3083 6.92615V21.3082Z"
+                                    stroke="#FF2F00"
+                                    stroke-width="0.999818"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                            />
+                        </svg>
+                        <p>Upon execution, the application identifies all files in the specified source directory that match the specified filter, then loads and saves each of these files to the specified output directory as the specified output version/type.</p>
+                    </div>
+
+                    <div>
+                        <svg
+                                width="23"
+                                height="24"
+                                viewBox="0 0 23 24"
+                                fill="none"
+                                xmlns="http://www.w3.org/2000/svg"
+                        >
+                            <path
+                                    d="M11.5029 16.0039H11.5125M11.5029 8.00195V12.0029M21.0886 12.0029C21.0886 17.5271 16.7969 22.0054 11.5029 22.0054C6.20889 22.0054 1.91724 17.5271 1.91724 12.0029C1.91724 6.47873 6.20889 2.00049 11.5029 2.00049C16.7969 2.00049 21.0886 6.47873 21.0886 12.0029Z"
+                                    stroke="#FF2F00"
+                                    stroke-width="1.00024"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                            />
+                        </svg>
+
+                        <p>If the <strong>audit flag</strong> is enabled, an audit/repair operation will be applied to each file as it is loaded.</p>
+                        <p>If the <strong>recursive flag</strong> is enabled, subdirectories within the source directory will be processed recursively.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="section-cta">
+    <div class="container">
+        <div class="card-cta auto-show">
+            <svg
+                    class="upper-circle"
+                    width="555"
+                    height="313"
+                    viewBox="0 0 555 313"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+            >
+                <g
+                        filter="url(#filter0_i_2638_328)"
+                        data-figma-bg-blur-radius="4"
+                >
+                    <ellipse
+                            cx="381.5"
+                            cy="382"
+                            rx="381.5"
+                            ry="382"
+                            transform="matrix(-1 0 0 1 555 -451)"
+                            fill="url(#paint0_radial_2638_328)"
+                    />
+                </g>
+                <defs>
+                    <filter
+                            id="filter0_i_2638_328"
+                            x="-218"
+                            y="-455"
+                            width="777"
+                            height="778"
+                            filterUnits="userSpaceOnUse"
+                            color-interpolation-filters="sRGB"
+                    >
+                        <feflood flood-opacity="0" result="BackgroundImageFix" />
+                        <feblend
+                                mode="normal"
+                                in="SourceGraphic"
+                                in2="BackgroundImageFix"
+                                result="shape"
+                        />
+                        <fecolormatrix
+                                in="SourceAlpha"
+                                type="matrix"
+                                values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0"
+                                result="hardAlpha"
+                        />
+                        <feoffset dx="-10" dy="10" />
+                        <fegaussianblur stdDeviation="25" />
+                        <fecomposite
+                                in2="hardAlpha"
+                                operator="arithmetic"
+                                k2="-1"
+                                k3="1"
+                        />
+                        <fecolormatrix
+                                type="matrix"
+                                values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.24 0"
+                        />
+                        <feblend
+                                mode="normal"
+                                in2="shape"
+                                result="effect1_innerShadow_2638_328"
+                        />
+                    </filter>
+                    <clippath
+                            id="bgblur_0_2638_328_clip_path"
+                            transform="translate(218 455)"
+                    >
+                        <ellipse
+                                cx="381.5"
+                                cy="382"
+                                rx="381.5"
+                                ry="382"
+                                transform="matrix(-1 0 0 1 555 -451)"
+                        />
+                    </clippath>
+                    <radialgradient
+                            id="paint0_radial_2638_328"
+                            cx="0"
+                            cy="0"
+                            r="1"
+                            gradientUnits="userSpaceOnUse"
+                            gradientTransform="translate(336 150.697) rotate(68.9005) scale(330.566 330.245)"
+                    >
+                        <stop stop-color="#FFC0B2" />
+                        <stop offset="0.271211" stop-color="#FF9780" />
+                        <stop offset="1" stop-color="#FF2F00" />
+                    </radialgradient>
+                </defs>
+            </svg>
+
+            <h3>GET STARTED TODAY</h3>
+            <p>Try ODA software free for 60 days.</p>
+            <p>No risk, no credit card required.</p>
+            <a href="https://www.opendesign.com/free-trial" class="btn-white">
+                Try for Free
+                <svg
+                        width="25"
+                        height="24"
+                        viewBox="0 0 25 24"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                >
+                    <path
+                            d="M12.5 5V19M12.5 19L19.5 12M12.5 19L5.5 12"
+                            stroke="#1A1A1A"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                    />
+                </svg>
+            </a>
+
+            <svg
+                    class="bottom-circle"
+                    width="421"
+                    height="224"
+                    viewBox="0 0 421 224"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+            >
+                <foreignobject
+                        x="-149.84"
+                        y="-150"
+                        width="842.932"
+                        height="843.8"
+                ></foreignobject>
+                <g
+                        filter="url(#filter0_ii_2638_327)"
+                        data-figma-bg-blur-radius="150"
+                >
+                    <ellipse
+                            cx="271.466"
+                            cy="271.9"
+                            rx="271.466"
+                            ry="271.9"
+                            transform="matrix(-1 0 0 1 543.092 0)"
+                            fill="white"
+                            fill-opacity="0.03"
+                    />
+                </g>
+                <defs>
+                    <filter
+                            id="filter0_ii_2638_327"
+                            x="-149.84"
+                            y="-150"
+                            width="842.932"
+                            height="843.8"
+                            filterUnits="userSpaceOnUse"
+                            color-interpolation-filters="sRGB"
+                    >
+                        <feflood flood-opacity="0" result="BackgroundImageFix" />
+                        <feblend
+                                mode="normal"
+                                in="SourceGraphic"
+                                in2="BackgroundImageFix"
+                                result="shape"
+                        />
+                        <fecolormatrix
+                                in="SourceAlpha"
+                                type="matrix"
+                                values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0"
+                                result="hardAlpha"
+                        />
+                        <feoffset dy="11.2109" />
+                        <fegaussianblur stdDeviation="25" />
+                        <fecomposite
+                                in2="hardAlpha"
+                                operator="arithmetic"
+                                k2="-1"
+                                k3="1"
+                        />
+                        <fecolormatrix
+                                type="matrix"
+                                values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.1 0"
+                        />
+                        <feblend
+                                mode="normal"
+                                in2="shape"
+                                result="effect1_innerShadow_2638_327"
+                        />
+                        <fecolormatrix
+                                in="SourceAlpha"
+                                type="matrix"
+                                values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0"
+                                result="hardAlpha"
+                        />
+                        <feoffset />
+                        <fegaussianblur stdDeviation="95.293" />
+                        <fecomposite
+                                in2="hardAlpha"
+                                operator="arithmetic"
+                                k2="-1"
+                                k3="1"
+                        />
+                        <fecolormatrix
+                                type="matrix"
+                                values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.2 0"
+                        />
+                        <feblend
+                                mode="normal"
+                                in2="effect1_innerShadow_2638_327"
+                                result="effect2_innerShadow_2638_327"
+                        />
+                    </filter>
+                    <clippath
+                            id="bgblur_0_2638_327_clip_path"
+                            transform="translate(149.84 150)"
+                    >
+                        <ellipse
+                                cx="271.466"
+                                cy="271.9"
+                                rx="271.466"
+                                ry="271.9"
+                                transform="matrix(-1 0 0 1 543.092 0)"
+                        />
+                    </clippath>
+                </defs>
+            </svg>
+        </div>
+    </div>
+</section>
+
+    </div>
+
+<footer>
+    <div class="oda-footer" data-elastic-exclude>
+    <div class="container">
+        <div class="mcp-servers-promo-banner">
+            <div class="info">
+                <h3>ODA MCP Servers</h3>
+                <p>Now available!</p>
+                <a href="https://www.opendesign.com/products/mcp-servers?utm_source=website&utm_medium=footer_banner&utm_campaign=mcp_servers_announce">Learn More</a>
+            </div>
+        </div>
+        <nav class="footer-nav nav-general">
+            <a class="footer-logo" href="/">
+<svg xmlns="http://www.w3.org/2000/svg" width="60" height="29" viewBox="0 0 60 29" fill="none">
+    <g clip-path="url(#clip0_9534_4112)">
+        <path d="M46.6198 0L42.77 4.68355L51.6902 23.4646H43.5681L39.3428 28.1481H53.8968H55.0235H60L46.6198 0Z" fill="#FFFFFF"/>
+        <path d="M43.4742 14.3785C43.4742 7.02533 37.6526 1.03038 30.4226 0.655701H29.7183H29.0141H21.878L27.1362 6.55697H29.7183C34.0376 6.55697 37.5118 10.0696 37.5118 14.3785C37.5118 18.6874 33.9906 22.2 29.6714 22.2H28.9671H27.1831L21.7841 28.1013H30.4226C37.6996 27.7266 43.4742 21.7317 43.4742 14.3785Z" fill="#FFFFFF"/>
+        <path d="M13.7089 0.655701C7.98121 0.655701 3.05164 4.16836 0.985917 9.13293H7.93427C9.38966 7.54052 11.4084 6.55697 13.7089 6.55697C15.3521 6.55697 16.8545 7.07217 18.0751 7.9152C20.1878 9.32027 21.5493 11.7089 21.5493 14.3785C21.5493 17.095 20.1878 19.4836 18.0751 20.8418C16.8075 21.6848 15.3052 22.2 13.7089 22.2C11.1267 22.2 8.82628 20.9355 7.37088 18.9684H0.704224C2.58216 24.3076 7.69953 28.1013 13.662 28.1013C21.2676 28.1013 27.4178 21.919 27.4178 14.3785C27.4648 6.83799 21.3145 0.655701 13.7089 0.655701Z" fill="#FFFFFF"/>
+        <path d="M0.375581 10.8658C0.187788 11.5215 0.0938967 12.1772 0 12.8329V13.2544H6.00938C6.15023 12.4114 6.38497 11.5684 6.76056 10.819H0.375581V10.8658Z" fill="#FF2F00"/>
+        <path d="M0 14.8469V15.8772C0.0469483 16.3456 0.140845 16.814 0.234742 17.2823H6.47887C6.19718 16.5329 6.00938 15.7367 5.96243 14.8937H0V14.8469Z" fill="#FF2F00"/>
+    </g>
+    <defs>
+        <clipPath id="clip0_9534_4112">
+            <rect width="60" height="28.1481" fill="white"/>
+        </clipPath>
+    </defs>
+</svg>
+</a>
+            <a class="footer-auth" href="/user/login">Sign In</a>
+            <a href="https://www.linkedin.com/company/open-design-alliance/" class="footer-social" title="LinkedIn" target="_blank">
+                <svg width="63" height="63" viewBox="0 0 63 63" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path fill-rule="evenodd" clip-rule="evenodd" d="M31.5 60.9638C47.7724 60.9638 60.9638 47.7724 60.9638 31.5C60.9638 15.2276 47.7724 2.03616 31.5 2.03616C15.2276 2.03616 2.03616 15.2276 2.03616 31.5C2.03616 47.7724 15.2276 60.9638 31.5 60.9638ZM31.5 62.5C48.6208 62.5 62.5 48.6208 62.5 31.5C62.5 14.3792 48.6208 0.5 31.5 0.5C14.3792 0.5 0.5 14.3792 0.5 31.5C0.5 48.6208 14.3792 62.5 31.5 62.5Z" fill="#FE360B"/>
+                    <path d="M20.8922 43.4446H20.1241V44.2127H20.8922V43.4446ZM25.5861 43.4446V44.2127H26.3542V43.4446H25.5861ZM20.8922 26.8157V26.0476H20.1241V26.8157H20.8922ZM25.5861 26.8157H26.3542V26.0476H25.5861V26.8157ZM29.5002 26.9101V26.142H28.7322V26.9101H29.5002ZM33.8066 26.9101H34.5747V26.142H33.8066V26.9101ZM29.5002 43.4986H28.7322V44.2667H29.5002V43.4986ZM33.9876 43.4986V44.2667H34.7556V43.4986H33.9876ZM39.013 43.4986H38.245V44.2667H39.013V43.4986ZM43.5002 43.4986V44.2667H44.2683V43.4986H43.5002ZM33.8684 29.1796V29.9477H34.3611L34.5665 29.4997L33.8684 29.1796ZM33.8066 29.1796H33.0386V29.9477H33.8066V29.1796ZM23.2363 19.2661C24.278 19.2661 25.206 20.1823 25.206 21.4117H26.7421C26.7421 19.425 25.2148 17.73 23.2363 17.73V19.2661ZM21.2659 21.4117C21.2659 20.1817 22.1906 19.2661 23.2363 19.2661V17.73C21.2528 17.73 19.7297 19.4256 19.7297 21.4117H21.2659ZM23.2363 23.5528C22.1894 23.5528 21.2659 22.6392 21.2659 21.4117H19.7297C19.7297 23.398 21.254 25.089 23.2363 25.089V23.5528ZM25.206 21.4117C25.206 22.6386 24.2793 23.5528 23.2363 23.5528V25.089C25.2135 25.089 26.7421 23.3985 26.7421 21.4117H25.206ZM20.8922 44.2127H25.5861V42.6765H20.8922V44.2127ZM20.1241 26.8157V43.4446H21.6602V26.8157H20.1241ZM25.5861 26.0476H20.8922V27.5838H25.5861V26.0476ZM26.3542 43.4446V26.8157H24.818V43.4446H26.3542ZM29.5002 27.6782H33.8066V26.142H29.5002V27.6782ZM30.2683 43.4986V26.9101H28.7322V43.4986H30.2683ZM33.9876 42.7306H29.5002V44.2667H33.9876V42.7306ZM33.2195 35.2938V43.4986H34.7556V35.2938H33.2195ZM36.6795 30.2642C35.9778 30.2642 35.3681 30.4232 34.8611 30.7461C34.3546 31.0687 34.0044 31.5208 33.7652 32.0197C33.3032 32.9836 33.2195 34.2027 33.2195 35.2938H34.7556C34.7556 34.2214 34.8503 33.3099 35.1504 32.6838C35.2923 32.3878 35.4692 32.1801 35.6864 32.0417C35.9031 31.9037 36.2136 31.8004 36.6795 31.8004V30.2642ZM39.7811 35.4317C39.7811 34.5013 39.7817 33.2647 39.4369 32.2611C39.2587 31.7424 38.9713 31.2306 38.497 30.8501C38.0129 30.4617 37.4014 30.2642 36.6795 30.2642V31.8004C37.1099 31.8004 37.3663 31.9124 37.5358 32.0483C37.715 32.1922 37.8671 32.4196 37.9841 32.7603C38.2299 33.4756 38.245 34.4386 38.245 35.4317H39.7811ZM39.7811 43.4986V35.4317H38.245V43.4986H39.7811ZM43.5002 42.7306H39.013V44.2667H43.5002V42.7306ZM42.7321 34.4003V43.4986H44.2683V34.4003H42.7321ZM38.1149 27.2686C39.1556 27.2686 39.9268 27.465 40.5063 27.7812C41.0801 28.0943 41.5117 28.5495 41.8391 29.1457C42.5156 30.3776 42.7321 32.1783 42.7321 34.4003H44.2683C44.2683 32.157 44.0651 30.0078 43.1855 28.4062C42.7348 27.5855 42.1042 26.9031 41.2421 26.4327C40.3857 25.9654 39.3472 25.7325 38.1149 25.7325V27.2686ZM34.5665 29.4997C35.0646 28.4136 36.2867 27.2686 38.1149 27.2686V25.7325C35.5767 25.7325 33.8695 27.3344 33.1702 28.8594L34.5665 29.4997ZM33.8066 29.9477H33.8684V28.4115H33.8066V29.9477ZM33.0386 26.9101V29.1796H34.5747V26.9101H33.0386Z" fill="#FE360B"/>
+                </svg>
+            </a>
+            <a href="https://www.youtube.com/OpenDesignAlliance" class="footer-social" title="Youtube" target="_blank">
+                <svg width="63" height="63" viewBox="0 0 63 63" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path fill-rule="evenodd" clip-rule="evenodd" d="M31.1667 60.9638C47.4391 60.9638 60.6305 47.7724 60.6305 31.5C60.6305 15.2276 47.4391 2.03616 31.1667 2.03616C14.8943 2.03616 1.70285 15.2276 1.70285 31.5C1.70285 47.7724 14.8943 60.9638 31.1667 60.9638ZM62.1667 31.5C62.1667 48.6208 48.2875 62.5 31.1667 62.5C14.0459 62.5 0.166687 48.6208 0.166687 31.5C0.166687 14.3792 14.0459 0.5 31.1667 0.5C48.2875 0.5 62.1667 14.3792 62.1667 31.5Z" fill="#FE360B"/>
+                    <path fill-rule="evenodd" clip-rule="evenodd" d="M13.1756 25.0972C13.1756 21.5521 16.0495 18.6782 19.5946 18.6782H42.7373C46.2824 18.6782 49.1563 21.5521 49.1563 25.0972V37.9034C49.1563 41.4485 46.2824 44.3224 42.7373 44.3224H19.5946C16.0495 44.3224 13.1756 41.4485 13.1756 37.9034V25.0972ZM19.5946 20.2144C16.8979 20.2144 14.7118 22.4005 14.7118 25.0972V37.9034C14.7118 40.6001 16.8979 42.7863 19.5946 42.7863H42.7373C45.434 42.7863 47.6201 40.6001 47.6201 37.9034V25.0972C47.6201 22.4005 45.434 20.2144 42.7373 20.2144H19.5946Z" fill="#FE360B"/>
+                    <path fill-rule="evenodd" clip-rule="evenodd" d="M28.6466 27.6183C28.5583 27.5729 28.4537 27.5769 28.3686 27.6296C28.2824 27.6829 28.2259 27.7806 28.2258 27.8902V35.1099C28.2269 35.2186 28.2834 35.3152 28.3692 35.368C28.4542 35.4203 28.5586 35.4241 28.6467 35.3788C28.6469 35.3787 28.6466 35.3789 28.6467 35.3788L35.5815 31.7738L35.5831 31.773C35.6794 31.7231 35.7449 31.6196 35.7449 31.5013C35.7449 31.3829 35.6794 31.2794 35.5831 31.2295L35.5815 31.2287L28.6466 27.6183C28.6463 27.6181 28.6468 27.6184 28.6466 27.6183ZM27.5605 26.3231C28.1045 25.9866 28.7839 25.9601 29.3523 26.2538L29.3543 26.2549L36.2897 29.8655C36.29 29.8657 36.2903 29.8659 36.2906 29.866C36.9017 30.183 37.2811 30.8157 37.2811 31.5013C37.2811 32.1868 36.9016 32.8196 36.2905 33.1365C36.2902 33.1367 36.2908 33.1364 36.2905 33.1365L29.3535 36.7427L29.3524 36.7433C28.7853 37.0363 28.1079 37.0107 27.5644 36.6765C27.0219 36.3428 26.6931 35.7514 26.6897 35.1167L26.6897 35.1126V27.8899C26.69 27.2536 27.0174 26.659 27.5605 26.3231Z" fill="#FE360B"/>
+                </svg>
+            </a>
+            <a href="https://twitter.com/realopendesign" class="footer-social" title="Twitter" target="_blank">
+                <svg width="63" height="63" viewBox="0 0 63 63" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path fill-rule="evenodd" clip-rule="evenodd" d="M31.8333 60.9638C48.1058 60.9638 61.2972 47.7724 61.2972 31.5C61.2972 15.2276 48.1058 2.03616 31.8333 2.03616C15.5609 2.03616 2.36951 15.2276 2.36951 31.5C2.36951 47.7724 15.5609 60.9638 31.8333 60.9638ZM62.8333 31.5C62.8333 48.6208 48.9542 62.5 31.8333 62.5C14.7125 62.5 0.833344 48.6208 0.833344 31.5C0.833344 14.3792 14.7125 0.5 31.8333 0.5C48.9542 0.5 62.8333 14.3792 62.8333 31.5Z" fill="#FE360B"/>
+                    <path d="M19.4945 20.9868L29.1672 34.177L19.4334 44.9011H21.6241L30.146 35.512L37.0315 44.9011H44.4865L34.2695 30.969L43.3297 20.9868H41.139L33.2907 29.634L26.9495 20.9868H19.4945ZM22.7161 22.6325H26.1409L41.2644 43.2551H37.8396L22.7161 22.6325Z" fill="#FE360B"/>
+                </svg>
+            </a>
+                    </nav>
+        <nav class="footer-nav nav-products">
+            <a class="source-code" href="https://www.opendesign.com/source-code">Source code</a>
+            <ul>
+                <li>
+                    <h4>Products</h4>
+                    <a href="https://www.opendesign.com/products">ODA Platform</a>
+                    <a href="https://www.opendesign.com/releases">27.10 Release - Oct 30, 2026</a>
+                    <a href="https://www.opendesign.com/supported-platforms">Supported platforms</a>
+                </li>
+            </ul>
+            <a class="trial" href="https://www.opendesign.com/free-trial">Free trial</a>
+            <ul>
+                <li>
+                    <h5>2D CAD</h5>
+                    <a href="https://www.opendesign.com/products/drawings">Drawings<small>DWG DGN</small></a>
+                    <a href="https://www.opendesign.com/products/map3d">Map</a>
+                    <a href="https://www.opendesign.com/products/architecture">Architecture</a>
+                </li>
+                <li>
+                    <h5>BIM</h5>
+                    <a href="https://www.opendesign.com/products/bimrv">BimRv<small>Revit</small></a>
+                    <a href="https://www.opendesign.com/products/bimnv">BimNv<small>Navisworks</small></a>
+                    <a href="https://www.opendesign.com/products/ifc-sdk">IFC</a>
+                    <a href="https://www.opendesign.com/products/scan-to-bim">Scan-to-BIM</a>
+                    <a href="https://www.opendesign.com/products/survey-sdk">Survey SDK</a>
+                    <a href="https://www.opendesign.com/products/steel-sdk">Steel SDK</a>
+                </li>
+                <li>
+                    <h5>3D CAD</h5>
+                    <a href="https://www.opendesign.com/products/mechanical">Mechanical</a>
+                    <a href="https://www.opendesign.com/products/civil">Civil</a>
+                    <a href="https://www.opendesign.com/products/step">STEP</a>
+                    <a href="https://www.opendesign.com/products/mcad-sdk">MCAD<small>JT, Solidworks, <br>Inventor etc.</small></a>
+                </li>
+                <li>
+                    <h5><span>in</span>WEB<sup>&trade;</sup></h5>
+                    <a href="https://www.opendesign.com/products/inweb"><span>in</span>WEB<sup>&trade;</sup></a>
+                    <a href="https://www.opendesign.com/products/cde">CDE</a>
+                </li>
+                <li>
+                    <h5>Technologies</h5>
+                    <a href="https://www.opendesign.com/products/mcp-servers">MCP Servers</a>
+                    <a href="https://www.opendesign.com/products/visualize">Visualize</a>
+                    <a href="https://www.opendesign.com/products/exchange">Exchange</a>
+                    <a href="https://www.opendesign.com/products/publish">Publish</a>
+                </li>
+                <li>
+                    <h5>Free</h5>
+                    <a href="https://openifcviewer.com/" target="_blank">ODA IFC Viewer</a>
+                    <a href="https://openstepviewer.com/" target="_blank">ODA STEP Viewer</a>
+                    <a href="https://www.opendesign.com/guestfiles/oda_drawings_explorer">Drawings Explorer</a>
+                    <a href="https://www.opendesign.com/guestfiles/oda_viewer">ODA Viewer</a>
+                    <a href="https://cloud.opendesign.com/index.html#/login">Web Viewer</a>
+                    <a href="https://www.opendesign.com/guestfiles/oda_file_converter">DWG convertor</a>
+                </li>
+            </ul>
+        </nav>
+        <nav class="footer-nav nav-pages">
+            <ul>
+                <li>
+                    <h4>About</h4>
+                    <a href="https://www.opendesign.com/about">About us</a>
+                    <a href="https://www.opendesign.com/contact">Contacts</a>
+                </li>
+                <li>
+                    <h4>Pricing</h4>
+                    <a href="/pricing">Pricing</a>
+                    <a href="https://www.opendesign.com/pricing/plan-calculator">Calculator</a>
+                </li>
+                <li>
+                    <h4>Support</h4>
+                    <a href="https://www.opendesign.com/support">Support Platform</a>
+                    <a href="https://www.opendesign.com/consulting-service">Consulting <br>Services</a>
+                    <a href="/blog">Blog</a>
+                </li>
+                <li>
+                    <h4>Membership</h4>
+                    <a href="https://www.opendesign.com/core-package">Core SDKs <br>Package</a>
+                    <a href="https://www.opendesign.com/sig">Strategic <br>Interoperability <br>Group</a>
+                    <a href="/member-showcase">Members</a>
+                </li>
+            </ul>
+        </nav>
+        <nav class="footer-nav nav-docs">
+            <ul>
+                <li>
+                    <h4>Docs</h4>
+                    <a href="https://www.opendesign.com/trademark">Trademark Disclaimer</a>
+                    <a href="https://www.opendesign.com/privacy">Privacy Policy</a>
+                    <a href="https://www.opendesign.com/open-resources">Open resources</a>
+                    <a href="https://www.opendesign.com/security">Vulnerability Disclosure Policy</a>
+                    <a href="/security-advisories">Security Advisories</a>
+                                        <a href="#" onclick="window.odaConsent.openSettings(); return false;">Cookie settings</a>
+                </li>
+            </ul>
+        </nav>
+        <div class="footer-copyright">&copy; 2026 Open Design Alliance. All rights reserved.</div>
+    </div>
+</div>
+
+</footer>
+
+  </div>
+
+
+    <div id="oda-common-floating-widget" class="oda-common-floating-widget common-contact">
+    <button type="button" onclick="openContactModal()">Schedule a call</button>
+    <div class="dropup">
+        <div class="dropdown-menu">
+            <a class="dropdown-item" href="https://www.opendesign.com/files/2025-10/ODA%20Complete%20Interoperability%202025.pdf" target="_blank">English</a>
+            <hr />
+            <a class="dropdown-item" href="https://www.opendesign.com/files/2025-11/ODA%20Complete%20Interoperability%202025%20%28Chinese%29.pdf" target="_blank">中文演示文稿</a>
+        </div>
+        <button type="button" data-toggle="dropdown" aria-expanded="false">
+            <span>About ODA</span>
+            <span class="caret">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none">
+                    <path d="M4.34277 7L9.99963 12.6569L15.6565 7" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </span>
+        </button>
+    </div>
+</div>
+
+<div id="contact-modal" class="contact-modal modal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Always here to assist</h5>
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="15" viewBox="0 0 14 15" fill="none">
+                        <path d="M12.293 0.792969C12.6835 0.402444 13.3165 0.402444 13.707 0.792969C14.0976 1.18349 14.0976 1.81651 13.707 2.20703L8.41406 7.5L13.707 12.793C14.0976 13.1835 14.0976 13.8165 13.707 14.207C13.3165 14.5976 12.6835 14.5976 12.293 14.207L7 8.91406L1.70703 14.207C1.31651 14.5976 0.683493 14.5976 0.292969 14.207C-0.0975555 13.8165 -0.0975555 13.1835 0.292969 12.793L5.58594 7.5L0.292969 2.20703C-0.0975555 1.81651 -0.0975555 1.18349 0.292969 0.792969C0.683493 0.402444 1.31651 0.402444 1.70703 0.792969L7 6.08594L12.293 0.792969Z" fill="#CCCCCC"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="bdm-contact-content">
+    <p>
+                    Our <strong>Business Development Managers</strong> are available <br>to discuss any questions you might have
+            </p>
+    <ul>
+        <li>
+            <img src="https://static.opendesign.com/themes/oda/img/widgets/bdm/contact/irina-rudeva.png" alt="Irina Rudeva" class="md-render-skip" />
+            <div class="contact-info">
+                <span>🌐 Global</span>
+                <br class="visually-hidden d-none">
+                <h3>Irina Rudeva</h3>
+                <a href="https://calendly.com/oda-irina-rudeva" class="visually-hidden">Schedule a meeting</a>
+                <button type="button" onclick="initCommonCalendlyPopup()" class="md-render-skip">
+                    Schedule a meeting
+                    <svg xmlns="http://www.w3.org/2000/svg" width="25" height="24" viewBox="0 0 25 24" fill="none">
+                        <path d="M7.91833 17L17.9183 7M17.9183 7H7.91833M17.9183 7V17" stroke="#333333" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+            </div>
+        </li>
+        <li>
+            <img src="https://static.opendesign.com/themes/oda/img/widgets/bdm/contact/jesse-cai.png" alt="Jesse Cai" class="md-render-skip" />
+            <div class="contact-info">
+                <span>🇨🇳 China</span>
+                <br class="visually-hidden d-none">
+                <h3>Jesse Cai</h3>
+                <p>
+                    Connect on WeChat<span class="visually-hidden">: </span>
+                    <br class="md-render-skip">
+                    <span>
+                        stjiaxu
+                        <button id="contact-modal-wechat" class="copy-button" type="button" onclick="copyString('stjiaxu', this)">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="17" height="16" viewBox="0 0 17 16" fill="none">
+                                <g clip-path="url(#clip0_7985_64)">
+                                    <path d="M4.25238 9.99971H3.58579C3.23222 9.99971 2.89312 9.85926 2.6431 9.60924C2.39308 9.35922 2.25262 9.02012 2.25262 8.66654V2.66728C2.25262 2.3137 2.39308 1.9746 2.6431 1.72458C2.89312 1.47457 3.23222 1.33411 3.58579 1.33411H9.58506C9.93864 1.33411 10.2777 1.47457 10.5278 1.72458C10.7778 1.9746 10.9182 2.3137 10.9182 2.66728V3.33386M8.25189 6.0002H14.2512C14.9874 6.0002 15.5843 6.59708 15.5843 7.33337V13.3326C15.5843 14.0689 14.9874 14.6658 14.2512 14.6658H8.25189C7.5156 14.6658 6.91872 14.0689 6.91872 13.3326V7.33337C6.91872 6.59708 7.5156 6.0002 8.25189 6.0002Z" stroke="#333333" stroke-linecap="round" stroke-linejoin="round"/>
+                                </g>
+                                <defs>
+                                    <clipPath id="clip0_7985_64">
+                                        <rect width="15.998" height="15.998" fill="white" transform="translate(0.919434 0.000976562)"/>
+                                    </clipPath>
+                                </defs>
+                            </svg>
+                            <span class="copied d-none">Copied!</span>
+                        </button>
+                    </span>
+                </p>
+            </div>
+        </li>
+    </ul>
+</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+    <!-- Optional JavaScript -->
+    <!-- jQuery first, then Popper.js, then Bootstrap JS -->
+    <script type="application/json" data-drupal-selector="drupal-settings-json">{"path":{"baseUrl":"\/","pathPrefix":"","currentPath":"node\/798","currentPathIsAdmin":false,"isFront":false,"currentLanguage":"en"},"pluralDelimiter":"\u0003","suppressDeprecationErrors":true,"ajaxPageState":{"libraries":"eJxdjlEKwzAMQy_ULEcaSuO2gcQOtrfR2y9LB4N92c9CspCzC_iM-C63TYV9kYy4lUphFX6SOmno2Gne9yoJNZiftfB-ncQPtNBVJh6EPBwJzGNsikY2hTayjVRxfZBOHAx8if2Rall_rJLEJVhFmvwqeScfjdqI-RRzrDPn7jo8FV6E4x8vdppTiwlGb8xQWnc","theme":"oda","theme_token":null},"ajaxTrustedUrl":[],"oda_translation_banner":"\u003Cdiv class=\u0022translation-banner\u0022\u003E\n    \u003Cdiv class=\u0022popup-content translation-banner-content\u0022\u003E\n        \u003Cdiv id=\u0022popup-text\u0022 class=\u0022translation-banner-message\u0022\u003E\n            Would you like to change the website language to Chinese?\n        \u003C\/div\u003E\n        \u003Cdiv id=\u0022popup-buttons\u0022 class=\u0022translation-banner-buttons\u0022\u003E\n            \u003Ca class=\u0022lang-change-link hide-popup-button translation-banner-change\u0022 href=\u0022\/guestfiles\/oda_file_converter\u0022 title=\u0022Change to Chinese\u0022\u003EChange to Chinese\u003C\/a\u003E\n            \u003Ca class=\u0022keep-button translation-banner-keep\u0022 href=\u0022#\u0022 title=\u0022Keep English\u0022\u003EKeep English\u003C\/a\u003E\n        \u003C\/div\u003E\n    \u003C\/div\u003E\n\u003C\/div\u003E","language":"en","user":{"uid":0,"permissionsHash":"d88bb246e8cc8619e28e57d54c0d2c0c12d537230cb066852a723b50a188cfbf"}}</script>
+<script src="https://static.opendesign.com/files/js/js_QNMj4rZSYL4u2IckG24HgU7aqtfmcgpqlbUTYA8s9P0.js?scope=footer&amp;delta=0&amp;language=en&amp;theme=oda&amp;include=eJxdjEsOwyAMRC9UypGiSWwokrEjY6XK7UtRV13NVw9EYdA742eexU3jYYRcmnA6TC_2YE8nKq--iu2QNOKWpnVVLwbNyw7VKcXReazh3ahyTErvpl9Y4Fj0LRw6BNFM81_-AKsIOWs"></script>
+<script src="https://static.addtoany.com/menu/page.js" defer></script>
+<script src="https://static.opendesign.com/files/js/js_X0D2it84XkOGJUo1heq7bAE6tyjHRaSQDugAIh6iRKI.js?scope=footer&amp;delta=2&amp;language=en&amp;theme=oda&amp;include=eJxdjEsOwyAMRC9UypGiSWwokrEjY6XK7UtRV13NVw9EYdA742eexU3jYYRcmnA6TC_2YE8nKq--iu2QNOKWpnVVLwbNyw7VKcXReazh3ahyTErvpl9Y4Fj0LRw6BNFM81_-AKsIOWs"></script>
+
+</body>
+</html>

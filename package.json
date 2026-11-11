@@ -1,0 +1,43 @@
+{
+  "name": "cad-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "基于 Pi Agent Harness 的 CAD 读图与生成桌面软件",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run && npm run test:python && npm run test:smoke",
+    "test:contract": "vitest run tests/contract",
+    "test:python": "uv run --project python pytest -q python/tests",
+    "test:smoke": "npm run build && node scripts/smoke.mjs",
+    "test:smoke:drawing": "npm run build && node scripts/smoke-drawings.mjs",
+    "test:smoke:settings": "npm run build && node scripts/smoke.mjs --settings --shot out/smoke-settings.png",
+    "test:smoke:qa": "npm run build && node scripts/smoke-qa.mjs",
+    "test:smoke:highlight": "npm run build && node scripts/smoke-highlight.mjs",
+    "test:smoke:kb": "npm run build && node scripts/smoke-kb.mjs",
+    "test:smoke:kb-qa": "npm run build && node scripts/smoke-kb-qa.mjs",
+    "test:smoke:design": "npm run build && node scripts/smoke-design.mjs",
+    "test:smoke:history": "npm run build && node scripts/smoke-history.mjs",
+    "test:smoke:recovery": "npm run build && node scripts/smoke-recovery.mjs",
+    "test:smoke:oda": "npm run build && node scripts/smoke.mjs --oda --shot out/smoke-oda.png"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^1.5.2",
+    "@earendil-works/pi-ai": "^1.5.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "electron": "^45.3.0",
+    "electron-vite": "^6.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}

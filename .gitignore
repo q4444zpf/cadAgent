@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+python/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+samples/*.dwg
+samples/raw/
+logs/
+.DS_Store
