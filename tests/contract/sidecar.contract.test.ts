@@ -1,3 +1,5 @@
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { SidecarClient } from '../../src/node/sidecar/client'
@@ -81,6 +83,108 @@ describe('Node <-> Python sidecar contract', () => {
     expect(await client.layerEntities(file, 'MISSING')).toEqual([])
 
     await client.closeDrawing()
+  })
+})
+
+describe('project filesystem tools', () => {
+  const client = new SidecarClient()
+  let root = ''
+
+  beforeAll(async () => {
+    root = mkdtempSync(path.join(os.tmpdir(), 'cad-project-'))
+    mkdirSync(path.join(root, 'docs'))
+    mkdirSync(path.join(root, 'node_modules'))
+    writeFileSync(path.join(root, 'readme.md'), '# 项目说明\n', 'utf-8')
+    writeFileSync(path.join(root, 'docs', 'note.txt'), '纵坡 0.3%\n', 'utf-8')
+    writeFileSync(path.join(root, 'node_modules', 'skip.txt'), 'ignored', 'utf-8')
+    copyFileSync(path.resolve('samples/fixtures/simple.dxf'), path.join(root, 'simple.dxf'))
+    copyFileSync(
+      path.resolve('samples/fixtures/archives/sample.zip'),
+      path.join(root, 'sample.zip')
+    )
+    copyFileSync(
+      path.resolve('samples/fixtures/archives/sample.tar.gz'),
+      path.join(root, 'sample.tar.gz')
+    )
+    await client.start()
+  })
+
+  afterAll(async () => {
+    await client.stop()
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('scans the project root and ignores dependency directories', async () => {
+    const result = await client.scanProject(root)
+
+    expect(result.path).toBe('.')
+    expect(result.totals.files).toBe(5)
+    expect(result.totals.archives).toBe(2)
+    const names = result.entries.map((entry) => entry.name)
+    expect(names).toContain('readme.md')
+    expect(names).toContain('docs')
+    expect(names).not.toContain('node_modules')
+    expect(result.byExtension.md).toBe(1)
+  })
+
+  it('filters scans by extension and rejects paths outside the project', async () => {
+    const result = await client.scanProject(root, '.', { extension: 'zip' })
+
+    expect(result.totals.files).toBe(1)
+    expect(result.entries).toEqual([
+      expect.objectContaining({ name: 'sample.zip', type: 'archive', format: 'zip' })
+    ])
+
+    await expect(client.scanProject(root, '../')).rejects.toThrow(/超出项目范围/)
+  })
+
+  it('lists ZIP and TAR archives', async () => {
+    const zip = await client.listArchive(root, 'sample.zip')
+    expect(zip.format).toBe('zip')
+    expect(zip.entryCount).toBe(2)
+    expect(zip.entries.map((entry) => entry.name)).toEqual(['readme.txt', 'docs/spec.md'])
+
+    const tar = await client.listArchive(root, 'sample.tar.gz')
+    expect(tar.format).toBe('tar.gz')
+    expect(tar.entryCount).toBe(2)
+    expect(tar.totalUncompressedBytes).toBeGreaterThan(0)
+  })
+
+  it('extracts beside the archive without overwriting', async () => {
+    const first = await client.extractArchive(root, 'sample.zip')
+    expect(first.target).toBe('sample_解压')
+    expect(first.filesExtracted).toBe(2)
+    expect(readFileSync(path.join(root, 'sample_解压', 'readme.txt'), 'utf-8')).toContain(
+      '项目压缩包示例'
+    )
+
+    const second = await client.extractArchive(root, 'sample.zip')
+    expect(second.target).toBe('sample_解压-2')
+    expect(existsSync(path.join(root, 'sample_解压-2', 'docs', 'spec.md'))).toBe(true)
+
+    await expect(client.extractArchive(root, 'sample.zip', 'sample_解压')).rejects.toThrow(
+      /不会覆盖/
+    )
+  })
+
+  it('reads text files and summarizes DXF without expanding entities', async () => {
+    const text = await client.readFile(root, 'docs/note.txt')
+    expect(text.kind).toBe('text')
+    expect(text.content).toBe('纵坡 0.3%\n')
+    expect(text.encoding).toBe('utf-8')
+
+    const dxf = await client.readFile(root, 'simple.dxf')
+    expect(dxf.kind).toBe('dxf')
+    expect(dxf.summary?.summaryOnly).toBe(true)
+    expect(dxf.summary?.layers.find((layer) => layer.name === 'WALLS')?.entityCount).toBe(2)
+  })
+
+  it('refuses to read secrets and unsupported formats', async () => {
+    writeFileSync(path.join(root, '.env'), 'API_KEY=secret', 'utf-8')
+    writeFileSync(path.join(root, 'blob.bin'), 'binary', 'utf-8')
+
+    await expect(client.readFile(root, '.env')).rejects.toThrow(/敏感文件/)
+    await expect(client.readFile(root, 'blob.bin')).rejects.toThrow(/不支持读取/)
   })
 })
 

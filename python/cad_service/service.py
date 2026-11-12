@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from cad_service.drawing import close_dxf, layer_entities, open_dxf, parse_dxf
+from cad_service.files import extract_archive, list_archive, read_file, scan_project
 from cad_service.kb import KbStore
 
 SERVICE_NAME = "cad-service"
@@ -51,6 +52,60 @@ def _layer_entities(params: dict[str, Any]) -> dict[str, Any]:
 def _close_dxf(_: dict[str, Any]) -> dict[str, Any]:
     close_dxf()
     return {"closed": True}
+
+
+def _project_root(params: dict[str, Any]) -> str:
+    root = params.get("root")
+    if not isinstance(root, str) or not root:
+        raise ValueError("项目请求需要非空的 root 参数")
+    return root
+
+
+def _optional_str(params: dict[str, Any], name: str) -> str | None:
+    value = params.get(name)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{name} 参数必须是字符串")
+    return value
+
+
+def _project_scan(params: dict[str, Any]) -> dict[str, Any]:
+    return scan_project(
+        _project_root(params),
+        path=_optional_str(params, "path") or ".",
+        extension=_optional_str(params, "extension"),
+        limit=params.get("limit"),
+    )
+
+
+def _archive_list(params: dict[str, Any]) -> dict[str, Any]:
+    path = params.get("path")
+    if not isinstance(path, str) or not path:
+        raise ValueError("archive_list 需要非空的 path 参数")
+    return list_archive(_project_root(params), path)
+
+
+def _archive_extract(params: dict[str, Any]) -> dict[str, Any]:
+    path = params.get("path")
+    if not isinstance(path, str) or not path:
+        raise ValueError("archive_extract 需要非空的 path 参数")
+    return extract_archive(
+        _project_root(params),
+        path,
+        target=_optional_str(params, "target"),
+    )
+
+
+def _read_file(params: dict[str, Any]) -> dict[str, Any]:
+    path = params.get("path")
+    if not isinstance(path, str) or not path:
+        raise ValueError("read_file 需要非空的 path 参数")
+    return read_file(
+        _project_root(params),
+        path,
+        max_chars=params.get("maxChars"),
+    )
 
 
 def _store(params: dict[str, Any]) -> KbStore:
@@ -100,6 +155,10 @@ _HANDLERS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "open_dxf": _open_dxf,
     "layer_entities": _layer_entities,
     "close_dxf": _close_dxf,
+    "project_scan": _project_scan,
+    "archive_list": _archive_list,
+    "archive_extract": _archive_extract,
+    "read_file": _read_file,
     "kb_import": _kb_import,
     "kb_list": _kb_list,
     "kb_delete": _kb_delete,

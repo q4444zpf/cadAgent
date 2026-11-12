@@ -29,6 +29,11 @@ import type {
   LayerEntitiesResult,
   ModelProvider,
   ModelSettingsSave,
+  ProjectCloseOutcome,
+  ProjectInfo,
+  ProjectOpenOutcome,
+  ProjectPickFilesOutcome,
+  ProjectVerifyFilesOutcome,
   PublicModelSettings,
   SettingsSaveResult,
   SidecarStatus
@@ -49,6 +54,13 @@ declare global {
         layer: (path: string, layer: string) => Promise<LayerEntitiesResult>
         autoOpen: () => Promise<{ path: string } | null>
         onPhase: (callback: (event: DrawingPhaseEvent) => void) => () => void
+      }
+      project: {
+        open: () => Promise<ProjectOpenOutcome>
+        current: () => Promise<ProjectInfo | null>
+        close: () => Promise<ProjectCloseOutcome>
+        pickFiles: () => Promise<ProjectPickFilesOutcome>
+        verifyFiles: (paths: string[]) => Promise<ProjectVerifyFilesOutcome>
       }
       settings: {
         get: () => Promise<PublicModelSettings>

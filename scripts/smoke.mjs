@@ -39,6 +39,9 @@ const recoveryMode = args.includes('--recovery')
 const odaMode = args.includes('--oda')
 const odaMissingMode = args.includes('--oda-missing')
 const historyMode = takeOption('--history')
+const workspaceMode = takeOption('--workspace')
+const projectRoot = takeOption('--project-root')
+const attach = takeOption('--attach')
 const userData = takeOption('--user-data')
 const kbDir = takeOption('--kb-dir')
 
@@ -60,6 +63,9 @@ const env = {
   ...(odaMode ? { SMOKE_ODA: '1', SMOKE_ODA_MISSING: '1' } : {}),
   ...(odaMissingMode ? { SMOKE_ODA_MISSING: '1' } : {}),
   ...(historyMode ? { SMOKE_HISTORY: historyMode } : {}),
+  ...(workspaceMode ? { SMOKE_WORKSPACE: workspaceMode } : {}),
+  ...(projectRoot ? { SMOKE_PROJECT_ROOT: resolve(projectRoot) } : {}),
+  ...(attach ? { SMOKE_ATTACH: attach } : {}),
   ...(userData ? { SMOKE_USER_DATA: resolve(userData) } : {}),
   ...(kbDir ? { SMOKE_KB_DIR: resolve(kbDir) } : {})
 }
@@ -81,7 +87,7 @@ function onData(chunk) {
   output += chunk.toString()
   if (output.includes('SMOKE_OK')) {
     clearTimeout(timer)
-    console.log(`SMOKE PASS${dxf ? ` (${dxf})` : ''}${settingsMode ? ' (settings)' : ''}${qaMode ? ' (qa)' : ''}${highlightMode ? ' (highlight)' : ''}${kbMode ? ' (kb)' : ''}${kbQaMode ? ' (kb-qa)' : ''}${designMode ? ' (design)' : ''}${historyMode ? ` (history ${historyMode})` : ''}${recoveryMode ? ' (recovery)' : ''}${odaMode ? ' (oda-guide)' : ''}`)
+    console.log(`SMOKE PASS${dxf ? ` (${dxf})` : ''}${settingsMode ? ' (settings)' : ''}${qaMode ? ' (qa)' : ''}${highlightMode ? ' (highlight)' : ''}${kbMode ? ' (kb)' : ''}${kbQaMode ? ' (kb-qa)' : ''}${designMode ? ' (design)' : ''}${historyMode ? ` (history ${historyMode})` : ''}${workspaceMode ? ` (workspace ${workspaceMode})` : ''}${recoveryMode ? ' (recovery)' : ''}${odaMode ? ' (oda-guide)' : ''}`)
     child.kill()
     process.exit(0)
   }

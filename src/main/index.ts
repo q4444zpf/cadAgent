@@ -3,6 +3,7 @@ import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { QaAgent } from '../node/agent/qa-agent'
 import { KbAgent } from '../node/agent/kb-agent'
+import { createProjectTools } from '../node/agent/project-tools'
 import { DesignAgent } from '../node/design/agent'
 import { DesignSessionStore } from '../node/design/session'
 import { isDrawingOversize } from '../node/drawing/limits'
@@ -18,6 +19,11 @@ import { VisionRecognizer } from '../node/kb/vision'
 import { ModelRuntime } from '../node/model/runtime'
 import { SettingsStore } from '../node/model/settings'
 import { detectOdaConverter } from '../node/oda/detect'
+import {
+  missingProjectFiles,
+  resolveProjectInfo,
+  validateProjectFiles
+} from '../node/project/workspace'
 import { SidecarClient } from '../node/sidecar/client'
 import {
   AgentAskSchema,
@@ -49,6 +55,11 @@ import {
   type KbRebuildOutcome,
   type KbSearchOutcome,
   type LayerEntitiesResult,
+  type ProjectCloseOutcome,
+  type ProjectInfo,
+  type ProjectOpenOutcome,
+  type ProjectPickFilesOutcome,
+  type ProjectVerifyFilesOutcome,
   type SettingsSaveResult,
   type SidecarStatus
 } from '../shared/protocol'
@@ -101,7 +112,13 @@ const qaAgent = new QaAgent({
   models: modelRuntime,
   getSettings: () => settingsStore.getActive(),
   getDrawing: () => currentDrawing,
-  knowledge: (question) => kbAgent.ask(question)
+  knowledge: (question) => kbAgent.ask(question),
+  createProjectTools: () =>
+    createProjectTools({
+      getRoot: () => currentProjectRoot,
+      sidecar,
+      openDrawing: loadDrawing
+    })
 })
 const designAgent = new DesignAgent({
   models: modelRuntime,
@@ -111,6 +128,7 @@ const designAgent = new DesignAgent({
 const designSessions = new DesignSessionStore()
 const historyStore = new HistoryStore(join(app.getPath('userData'), 'history.db'))
 let currentSessionId = historyStore.getLastSession()
+let currentProjectRoot = resolveProjectInfo(process.env.SMOKE_PROJECT_ROOT ?? null)?.root ?? null
 let lastStatus: SidecarStatus = sidecar.getStatus()
 
 function createWindow(): BrowserWindow {
@@ -323,6 +341,91 @@ async function loadDrawing(filePath: string): Promise<DrawingOpenResult> {
   }
 }
 
+function currentProject(): ProjectInfo | null {
+  return resolveProjectInfo(currentProjectRoot)
+}
+
+function applySessionProject(sessionId: string): boolean {
+  const session = historyStore.getSession(sessionId)
+  if (!session) {
+    return false
+  }
+  const info = resolveProjectInfo(session.projectRoot)
+  currentProjectRoot = info?.root ?? null
+  return Boolean(session.projectRoot) && info === null
+}
+
+function registerProjectIpc(): void {
+  ipcMain.handle('project:current', (): ProjectInfo | null => currentProject())
+
+  ipcMain.handle('project:open', async (): Promise<ProjectOpenOutcome> => {
+    const result = await dialog.showOpenDialog({
+      title: '打开项目文件夹',
+      properties: ['openDirectory'],
+      ...(currentProjectRoot ? { defaultPath: currentProjectRoot } : {})
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, canceled: true }
+    }
+    const info = resolveProjectInfo(result.filePaths[0])
+    if (!info) {
+      return { ok: false, error: '项目文件夹不可用' }
+    }
+    currentProjectRoot = info.root
+    if (currentSessionId) {
+      historyStore.updateProjectRoot(currentSessionId, info.root)
+    }
+    logger.write('info', 'project', '打开项目', { root: info.root })
+    return { ok: true, project: info }
+  })
+
+  ipcMain.handle('project:close', (): ProjectCloseOutcome => {
+    currentProjectRoot = null
+    if (currentSessionId) {
+      historyStore.updateProjectRoot(currentSessionId, null)
+    }
+    logger.write('info', 'project', '关闭项目')
+    return { ok: true }
+  })
+
+  ipcMain.handle('project:verify-files', (_event, input: unknown): ProjectVerifyFilesOutcome => {
+    const info = currentProject()
+    if (!info) {
+      return { ok: false, error: '请先打开项目文件夹' }
+    }
+    if (!Array.isArray(input) || input.some((item) => typeof item !== 'string')) {
+      return { ok: false, error: '附件路径无效' }
+    }
+    return { ok: true, missing: missingProjectFiles(info.root, input as string[]) }
+  })
+
+  ipcMain.handle('project:pick-files', async (): Promise<ProjectPickFilesOutcome> => {
+    const info = currentProject()
+    if (!info) {
+      return { ok: false, error: '请先打开项目文件夹' }
+    }
+    const result = await dialog.showOpenDialog({
+      title: '选择文件作为上下文',
+      defaultPath: info.root,
+      properties: ['openFile', 'multiSelections']
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, canceled: true }
+    }
+    try {
+      const files = validateProjectFiles(info.root, result.filePaths)
+      logger.write('info', 'project', '选择附件', {
+        root: info.root,
+        count: files.length,
+        paths: files.map((file) => file.path)
+      })
+      return { ok: true, files }
+    } catch (error) {
+      return { ok: false, error: errorText(error) }
+    }
+  })
+}
+
 function registerIpc(): void {
   ipcMain.handle('sidecar:get-status', () => lastStatus)
   ipcMain.handle('sidecar:restart', async () => {
@@ -460,8 +563,27 @@ function registerIpc(): void {
       return { ok: false, error: '问题内容无效' }
     }
     try {
+      const attachments = parsed.data.attachments ?? []
+      if (attachments.length > 0) {
+        const info = currentProject()
+        if (!info) {
+          return { ok: false, error: '请先打开项目文件夹，再附加文件' }
+        }
+        try {
+          validateProjectFiles(
+            info.root,
+            attachments.map((file) => resolve(info.root, file.path))
+          )
+        } catch (error) {
+          return { ok: false, error: `${errorText(error)}，请重新选择附件` }
+        }
+      }
       const sessionId = ensureSession(parsed.data.prompt)
-      historyStore.appendMessage(sessionId, { role: 'user', text: parsed.data.prompt })
+      historyStore.appendMessage(sessionId, {
+        role: 'user',
+        text: parsed.data.prompt,
+        ...(attachments.length ? { attachments } : {})
+      })
       const outcome = await qaAgent.ask(parsed.data, broadcastAgentEvent)
       historyStore.updateDrawing(
         sessionId,
@@ -487,6 +609,7 @@ function registerIpc(): void {
     }
   })
   ipcMain.handle('agent:abort', () => qaAgent.abort())
+  registerProjectIpc()
   registerKbIpc()
   registerDesignIpc()
   registerHistoryIpc()
@@ -505,7 +628,8 @@ function ensureSession(prompt: string): string {
   const created = historyStore.createSession({
     title: sessionTitle(prompt),
     drawingPath: currentDrawing?.path ?? null,
-    drawingName: currentDrawing?.name ?? null
+    drawingName: currentDrawing?.name ?? null,
+    projectRoot: currentProjectRoot
   })
   currentSessionId = created.id
   historyStore.setLastSession(created.id)
@@ -539,7 +663,12 @@ function registerHistoryIpc(): void {
     }
   })
 
-  ipcMain.handle('history:current', (): HistorySessionOutcome => currentSession())
+  ipcMain.handle('history:current', (): HistorySessionOutcome => {
+    const outcome = currentSession()
+    return outcome.session
+      ? { ...outcome, projectUnavailable: applySessionProject(outcome.session.id) }
+      : outcome
+  })
 
   ipcMain.handle('history:get', (_event, input: unknown): HistorySessionOutcome => {
     const parsed = HistoryIdSchema.safeParse(input)
@@ -555,7 +684,10 @@ function registerHistoryIpc(): void {
       return { ok: false, error: '会话标题无效' }
     }
     try {
-      const created = historyStore.createSession(parsed.data)
+      const created = historyStore.createSession({
+        ...parsed.data,
+        projectRoot: currentProjectRoot
+      })
       currentSessionId = created.id
       historyStore.setLastSession(created.id)
       return sessionById(created.id)
@@ -573,6 +705,10 @@ function registerHistoryIpc(): void {
     if (outcome.ok) {
       currentSessionId = parsed.data.sessionId
       historyStore.setLastSession(parsed.data.sessionId)
+      return {
+        ...outcome,
+        projectUnavailable: applySessionProject(parsed.data.sessionId)
+      }
     }
     return outcome
   })
@@ -762,6 +898,7 @@ async function runSmoke(window: BrowserWindow): Promise<void> {
   const kbQaMode = process.env.SMOKE_KB_QA === '1'
   const designMode = process.env.SMOKE_DESIGN === '1'
   const historyMode = process.env.SMOKE_HISTORY
+  const workspaceMode = process.env.SMOKE_WORKSPACE
   const recoveryMode = process.env.SMOKE_RECOVERY === '1'
   const odaMode = process.env.SMOKE_ODA === '1'
 
@@ -779,7 +916,7 @@ async function runSmoke(window: BrowserWindow): Promise<void> {
       lastStatus.state === 'ready' && text.includes('侧车服务就绪') && text.includes('ezdxf')
     const expectationMet = !expected || text.includes(expected)
 
-    if (baseReady && (settingsMode || qaMode || highlightMode || kbMode || kbQaMode || designMode || historyMode || recoveryMode || odaMode || expectationMet)) {
+    if (baseReady && (settingsMode || qaMode || highlightMode || kbMode || kbQaMode || designMode || historyMode || workspaceMode || recoveryMode || odaMode || expectationMet)) {
       if (settingsMode) {
         try {
           await runSettingsSmoke(window, shotPath)
@@ -862,6 +999,19 @@ async function runSmoke(window: BrowserWindow): Promise<void> {
         try {
           await runHistorySmoke(window, historyMode, shotPath)
           console.log(`SMOKE_OK history-${historyMode}`)
+          app.quit()
+        } catch (error) {
+          console.error(`SMOKE_FAIL ${error instanceof Error ? error.message : String(error)}`)
+          await sidecar.stop()
+          app.exit(1)
+        }
+        return
+      }
+
+      if (workspaceMode) {
+        try {
+          await runWorkspaceSmoke(window, workspaceMode, shotPath)
+          console.log(`SMOKE_OK workspace-${workspaceMode}`)
           app.quit()
         } catch (error) {
           console.error(`SMOKE_FAIL ${error instanceof Error ? error.message : String(error)}`)
@@ -1687,7 +1837,176 @@ async function clickHistorySession(window: BrowserWindow): Promise<void> {
     return true;
   })()`)) as boolean
   if (!clicked) {
-    throw new Error('未找到历史会话')
+    await waitForCondition(async () => {
+      const ready = (await window.webContents.executeJavaScript(
+        `Boolean(document.querySelector('.history__session'))`
+      )) as boolean
+      return ready
+    }, '未找到历史会话')
+    await window.webContents.executeJavaScript(`(() => {
+      const target = document.querySelector('.history__session');
+      if (target) target.click();
+      return true;
+    })()`)
+  }
+}
+
+async function clickHistoryOpen(window: BrowserWindow): Promise<void> {
+  const findOpen = `(() => {
+    const actions = document.querySelector('.history__session-actions');
+    if (!actions) return null;
+    return Array.from(actions.querySelectorAll('button')).find(
+      (button) => (button.textContent || '').trim() === '打开'
+    ) || null;
+  })()`
+  await waitForCondition(async () => {
+    const enabled = (await window.webContents.executeJavaScript(
+      `(() => { const button = ${findOpen}; return Boolean(button && !button.disabled) })()`
+    )) as boolean
+    return enabled
+  }, '未找到历史会话的「打开」按钮')
+  await window.webContents.executeJavaScript(`(() => { const button = ${findOpen}; if (button) button.click(); return true })()`)
+}
+
+async function waitForChatIdle(window: BrowserWindow, deadline: number): Promise<void> {
+  while (Date.now() < deadline) {
+    const idle = (await window.webContents.executeJavaScript(`Boolean(
+      document.querySelector('.chat__composer button[type="submit"]')
+    )`)) as boolean
+    if (idle) {
+      return
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error('问答输入框未恢复可发送状态')
+}
+
+async function runWorkspaceSmoke(
+  window: BrowserWindow,
+  mode: string,
+  shotPath?: string
+): Promise<void> {
+  const root = process.env.SMOKE_PROJECT_ROOT
+  if (!root) {
+    throw new Error('工作区 smoke 需要 SMOKE_PROJECT_ROOT')
+  }
+  const deadline = Date.now() + 90_000
+  const projectName = basename(root)
+
+  if (mode === 'restore') {
+    await waitForBody(window, projectName, deadline)
+    await waitForBody(window, 'note.txt', deadline)
+    await waitForBody(window, 'temp.txt', deadline)
+    await waitForBody(window, '已不存在', deadline)
+    if (shotPath) {
+      await captureShot(window, shotPath)
+    }
+    return
+  }
+
+  if (mode !== 'seed') {
+    throw new Error(`未知 SMOKE_WORKSPACE 模式：${mode}`)
+  }
+
+  await enableFakeMode(window, deadline)
+  await waitForBody(window, projectName, deadline)
+
+  const attachReady = (await window.webContents.executeJavaScript(`(() => {
+    const button = document.querySelector('.chat__attach');
+    return Boolean(button && !button.disabled);
+  })()`)) as boolean
+  if (!attachReady) {
+    throw new Error('项目已打开但「选择文件」按钮不可用')
+  }
+
+  await waitForChatIdle(window, deadline)
+  await askQuestion(window, '项目里有哪些文件？')
+  await waitForBody(window, '假模型回答：项目内共', deadline)
+  await waitForBody(window, 'note.txt', deadline)
+  await waitForBody(window, '归档.zip', deadline)
+
+  await waitForChatIdle(window, deadline)
+  await askQuestion(window, '把 归档.zip 解压')
+  await waitForBody(window, '已解压到', deadline)
+  const extracted = await stat(join(root, '归档_解压', 'readme.txt')).catch(() => null)
+  if (!extracted?.isFile()) {
+    throw new Error('解压后未找到 归档_解压/readme.txt')
+  }
+
+  await waitForChatIdle(window, deadline)
+  await askQuestion(window, '把 归档.zip 解压')
+  await waitForBody(window, '归档_解压-2', deadline)
+  const second = await stat(join(root, '归档_解压-2', 'docs', 'spec.md')).catch(() => null)
+  if (!second?.isFile()) {
+    throw new Error('第二次解压未生成 归档_解压-2/docs/spec.md')
+  }
+
+  await waitForChatIdle(window, deadline)
+  await askQuestion(window, '读取项目文件 note.txt 的内容')
+  await waitForBody(window, '文件「note.txt」（text）', deadline)
+  await waitForBody(window, '排水沟净宽', deadline)
+  await waitForChatIdle(window, deadline)
+
+  const attachPaths = (process.env.SMOKE_ATTACH ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+  if (attachPaths.length === 0) {
+    throw new Error('seed 模式需要 SMOKE_ATTACH')
+  }
+  const attachments = validateProjectFiles(
+    root,
+    attachPaths.map((relative) => resolve(root, relative))
+  )
+
+  const attached = (await window.webContents.executeJavaScript(
+    `window.cad.agent.ask(${JSON.stringify({
+      requestId: 'smoke-workspace-attach',
+      prompt: '读取项目文件 note.txt 的内容',
+      attachments
+    })})`
+  )) as AgentAskResult
+  if (!attached.ok) {
+    throw new Error(`带附件提问失败：${attached.error ?? '未知错误'}`)
+  }
+
+  const session = (await window.webContents.executeJavaScript(
+    'window.cad.history.current()'
+  )) as HistorySessionOutcome
+  const withAttachments = session.session?.messages.find(
+    (message) => (message.attachments?.length ?? 0) > 0
+  )
+  if (!withAttachments || withAttachments.attachments?.length !== attachments.length) {
+    throw new Error(`附件元数据未持久化：${JSON.stringify(withAttachments ?? null)}`)
+  }
+  const assistant = session.session?.messages.at(-1)
+  if (!assistant?.text.includes('排水沟净宽')) {
+    throw new Error('带附件提问未读取 note.txt 内容')
+  }
+
+  const rejected = (await window.webContents.executeJavaScript(
+    `window.cad.agent.ask(${JSON.stringify({
+      requestId: 'smoke-workspace-outside',
+      prompt: '读取项目外文件',
+      attachments: [{ path: '../outside.txt', name: 'outside.txt', kind: 'text', size: 1 }]
+    })})`
+  )) as AgentAskResult
+  if (rejected.ok) {
+    throw new Error('项目外附件应被拒绝')
+  }
+
+  await clickButtonByText(window, '历史')
+  await clickHistorySession(window)
+  await clickHistoryOpen(window)
+  await waitForCondition(async () => {
+    const names = (await window.webContents.executeJavaScript(`Array.from(
+      document.querySelectorAll('.chat__attachment-name')
+    ).map((node) => node.textContent || '')`)) as string[]
+    return names.includes('note.txt') && names.includes('temp.txt')
+  }, '打开会话后未恢复附件芯片', 15_000)
+
+  if (shotPath) {
+    await captureShot(window, shotPath)
   }
 }
 

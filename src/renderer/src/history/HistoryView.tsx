@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import type {
   GenerationRecordView,
+  HistorySessionOutcome,
   HistorySessionSummary,
   HistorySessionView
 } from '../../../shared/protocol'
 
 interface HistoryViewProps {
-  onOpen: (session: HistorySessionView) => void
+  onOpen: (session: HistorySessionView, outcome: HistorySessionOutcome) => void
 }
 
 export function HistoryView({ onOpen }: HistoryViewProps) {
@@ -92,7 +93,7 @@ export function HistoryView({ onOpen }: HistoryViewProps) {
         setNotice(outcome.error ?? '会话不存在')
         return
       }
-      onOpen(outcome.session)
+      onOpen(outcome.session, outcome)
     } finally {
       setBusy(false)
     }

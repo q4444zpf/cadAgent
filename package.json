@@ -20,6 +20,7 @@
     "test:smoke:kb-qa": "npm run build && node scripts/smoke-kb-qa.mjs",
     "test:smoke:design": "npm run build && node scripts/smoke-design.mjs",
     "test:smoke:history": "npm run build && node scripts/smoke-history.mjs",
+    "test:smoke:workspace": "npm run build && node scripts/smoke-workspace.mjs",
     "test:smoke:recovery": "npm run build && node scripts/smoke-recovery.mjs",
     "test:smoke:oda": "npm run build && node scripts/smoke.mjs --oda --shot out/smoke-oda.png"
   },

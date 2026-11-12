@@ -5,18 +5,26 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { createInterface } from 'node:readline'
 import {
+  ArchiveExtractSchema,
+  ArchiveListSchema,
   DrawingEntitySchema,
   DrawingSchema,
+  FileReadSchema,
   HealthResultSchema,
   KbDocumentSchema,
   KbHitSchema,
+  ProjectScanSchema,
   SidecarResponseSchema,
+  type ArchiveExtractResult,
+  type ArchiveListResult,
   type Drawing,
   type DrawingEntity,
+  type FileReadResult,
   type HealthResult,
   type KbDocument,
   type KbHit,
   type KbRecognition,
+  type ProjectScanResult,
   type SidecarStatus
 } from '../../shared/protocol'
 
@@ -30,6 +38,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 const PARSE_REQUEST_TIMEOUT_MS = 120_000
 const SUMMARY_REQUEST_TIMEOUT_MS = 180_000
 const LAYER_REQUEST_TIMEOUT_MS = 180_000
+const FILE_TOOL_TIMEOUT_MS = 120_000
 
 export interface SidecarClientOptions {
   projectDir?: string
@@ -171,6 +180,51 @@ export class SidecarClient {
   async kbSearch(root: string, query: string, limit = 5): Promise<KbHit[]> {
     const result = (await this.request('kb_search', { root, query, limit })) as { hits?: unknown }
     return KbHitSchema.array().parse(result.hits ?? [])
+  }
+
+  async scanProject(
+    root: string,
+    path = '.',
+    options: { extension?: string; limit?: number } = {}
+  ): Promise<ProjectScanResult> {
+    const result = await this.request(
+      'project_scan',
+      {
+        root,
+        path,
+        ...(options.extension ? { extension: options.extension } : {}),
+        ...(options.limit ? { limit: options.limit } : {})
+      },
+      FILE_TOOL_TIMEOUT_MS
+    )
+    return ProjectScanSchema.parse(result)
+  }
+
+  async listArchive(root: string, path: string): Promise<ArchiveListResult> {
+    const result = await this.request('archive_list', { root, path }, FILE_TOOL_TIMEOUT_MS)
+    return ArchiveListSchema.parse(result)
+  }
+
+  async extractArchive(
+    root: string,
+    path: string,
+    target?: string
+  ): Promise<ArchiveExtractResult> {
+    const result = await this.request(
+      'archive_extract',
+      { root, path, ...(target ? { target } : {}) },
+      FILE_TOOL_TIMEOUT_MS
+    )
+    return ArchiveExtractSchema.parse(result)
+  }
+
+  async readFile(root: string, path: string, maxChars?: number): Promise<FileReadResult> {
+    const result = await this.request(
+      'read_file',
+      { root, path, ...(maxChars ? { maxChars } : {}) },
+      FILE_TOOL_TIMEOUT_MS
+    )
+    return FileReadSchema.parse(result)
   }
 
   async request<T = unknown>(

@@ -1,4 +1,4 @@
-import type { Agent } from '@earendil-works/pi-agent-core'
+import type { Agent, AgentTool } from '@earendil-works/pi-agent-core'
 import type { Context, FauxProviderHandle, TranscriptContext } from '@earendil-works/pi-ai'
 import type { AgentAsk, AgentStreamEvent, Drawing, EntityReference, KbHit } from '../../shared/protocol'
 import { describeError, redactSecret } from '../model/errors'
@@ -6,6 +6,7 @@ import type { ModelRuntime } from '../model/runtime'
 import type { StoredModelSettings } from '../model/settings'
 import type { KbAnswer } from './kb-agent'
 import { createKnowledgeTool } from './knowledge-tools'
+import { formatAttachmentContext } from './project-tools'
 import { createDrawingTools } from './reading-tools'
 import { extractReferences } from './references'
 import { lastAssistantTurn, lastToolResult } from './transcript'
@@ -15,7 +16,7 @@ type PiAiModule = typeof import('@earendil-works/pi-ai')
 
 export const QA_TIMEOUT_MS = 120_000
 
-export const SYSTEM_PROMPT = `你是水利与市政工程 CAD 图纸阅读助手，可以通过工具读取当前打开的 DXF 图纸。
+export const SYSTEM_PROMPT = `你是水利与市政工程 CAD 图纸阅读助手，可以通过工具读取当前打开的 DXF 图纸，也可以处理项目文件夹内的文件。
 
 规则：
 1. 只依据工具返回的数据回答，禁止编造图纸中不存在的图层、实体、尺寸或文字。
@@ -23,13 +24,18 @@ export const SYSTEM_PROMPT = `你是水利与市政工程 CAD 图纸阅读助手
 3. 引用具体实体时使用 #句柄 形式，例如 #A1。
 4. 用简洁的中文回答，先给结论，再给依据。
 5. 涉及规范、标准、图集或设计参数要求的问题，先调用 ask_knowledge；引用其结论时保留出处。
-6. 不讨论与当前图纸无关的话题。`
+6. 不讨论与当前图纸无关的话题。
+7. 处理项目内文件时，先用 scan_project 了解目录与文件；读取文件内容用 read_file，查看压缩包用 list_archive，解压用 extract_archive。路径一律使用相对项目根的路径。
+8. 未调用工具不得声称看过文件内容；文件读取结果被截断时说明只看到部分内容。
+9. 解压永远不会覆盖已有文件；显式目标已存在时向用户询问新的目录名。RAR/7z 暂不支持，请让用户先手动解压。
+10. 用户要求查看或分析项目内某张图纸时，先调用 open_project_drawing 切换当前图纸，再用读图工具核实。`
 
 export interface QaAgentDeps {
   models: ModelRuntime
   getSettings: () => StoredModelSettings
   getDrawing: () => Drawing | null
   knowledge?: (question: string) => Promise<KbAnswer>
+  createProjectTools?: () => AgentTool<any>[]
   timeoutMs?: number
 }
 
@@ -88,6 +94,7 @@ export class QaAgent {
 
     const sources: KbHit[] = []
     const tools = createDrawingTools(this.deps.getDrawing)
+    tools.push(...(this.deps.createProjectTools?.() ?? []))
     const knowledge = this.deps.knowledge
     if (knowledge) {
       tools.push(
@@ -158,7 +165,7 @@ export class QaAgent {
 
     let failure: unknown = null
     try {
-      await agent.prompt(input.prompt)
+      await agent.prompt(formatAttachmentContext(input.prompt, input.attachments))
     } catch (error) {
       failure = error
     } finally {
@@ -197,6 +204,36 @@ export class QaAgent {
 
   private async scriptFake(handle: FauxProviderHandle, prompt: string): Promise<void> {
     const { fauxAssistantMessage, fauxToolCall } = await loadPiAi()
+
+    if (this.deps.createProjectTools && PROJECT_HINT.test(prompt)) {
+      const archive = prompt.match(/[\w\u4e00-\u9fa5][\w\u4e00-\u9fa5.-]*\.(?:tar\.gz|tgz|zip|tar)/i)?.[0]
+      if (/解压/.test(prompt) && archive) {
+        handle.setResponses([
+          fauxAssistantMessage(fauxToolCall('extract_archive', { path: archive }), {
+            stopReason: 'toolUse'
+          }),
+          (context) => fauxAssistantMessage(extractReply(context as TranscriptContext))
+        ])
+        return
+      }
+      const document = prompt.match(
+        /[\w\u4e00-\u9fa5][\w\u4e00-\u9fa5.-]*\.(?:pdf|docx|txt|md|csv|dxf)/i
+      )?.[0]
+      if (/读取|内容|说明/.test(prompt) && document) {
+        handle.setResponses([
+          fauxAssistantMessage(fauxToolCall('read_file', { path: document }), {
+            stopReason: 'toolUse'
+          }),
+          (context) => fauxAssistantMessage(readReply(context as TranscriptContext))
+        ])
+        return
+      }
+      handle.setResponses([
+        fauxAssistantMessage(fauxToolCall('scan_project', {}), { stopReason: 'toolUse' }),
+        (context) => fauxAssistantMessage(scanReply(context as TranscriptContext))
+      ])
+      return
+    }
 
     if (this.deps.knowledge && KNOWLEDGE_HINT.test(prompt)) {
       handle.setResponses([
@@ -259,6 +296,7 @@ const KIND_LABELS: Record<string, string> = {
 }
 
 const KNOWLEDGE_HINT = /规范|标准|图集|条文|要求|规定|做法/
+const PROJECT_HINT = /项目|文件夹|压缩包|解压|扫描/
 
 function toolOutput(result: unknown): string {
   const content = (result as { content?: { type: string; text?: string }[] }).content ?? []
@@ -284,9 +322,7 @@ function dedupeSources(sources: KbHit[]): KbHit[] {
 interface KnowledgeData {
   answer?: string
   sources?: KbHit[]
-}
-
-function knowledgeReply(context: TranscriptContext): string {
+}function knowledgeReply(context: TranscriptContext): string {
   const data = lastToolResult(context) as KnowledgeData | null
   if (!data || typeof data.answer !== 'string') {
     return '假模型回答：知识库子 Agent 调用失败，无法给出带出处的结论。'
@@ -301,6 +337,53 @@ interface SummaryData {
   layerCount?: number
   kindCounts?: Record<string, number>
   layers?: { name?: string }[]
+}
+
+interface ScanData {
+  totals?: { files?: number; dirs?: number; archives?: number }
+  entries?: { name?: string }[]
+}
+
+function scanReply(context: TranscriptContext): string {
+  const data = lastToolResult(context) as ScanData | null
+  if (!data?.totals) {
+    return '假模型回答：无法读取项目扫描结果。'
+  }
+  const names = (data.entries ?? [])
+    .map((entry) => entry.name)
+    .filter(Boolean)
+    .slice(0, 10)
+    .join('、')
+  return `假模型回答：项目内共 ${data.totals.files ?? 0} 个文件、${data.totals.dirs ?? 0} 个目录、${data.totals.archives ?? 0} 个压缩包${names ? `。直接子项：${names}` : ''}。`
+}
+
+interface ExtractData {
+  target?: string
+  filesExtracted?: number
+}
+
+function extractReply(context: TranscriptContext): string {
+  const data = lastToolResult(context) as ExtractData | null
+  if (!data?.target) {
+    return '假模型回答：解压失败，未返回目标目录。'
+  }
+  return `假模型回答：已解压到「${data.target}」，共 ${data.filesExtracted ?? 0} 个文件。`
+}
+
+interface ReadData {
+  path?: string
+  kind?: string
+  content?: string
+  truncated?: boolean
+}
+
+function readReply(context: TranscriptContext): string {
+  const data = lastToolResult(context) as ReadData | null
+  if (!data?.path) {
+    return '假模型回答：无法读取文件内容。'
+  }
+  const content = (data.content ?? '').slice(0, 300)
+  return `假模型回答：文件「${data.path}」（${data.kind ?? '未知'}）内容：${content}${data.truncated ? '…（已截断）' : ''}`
 }
 
 function summaryReply(context: TranscriptContext): string {

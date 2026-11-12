@@ -4,12 +4,14 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import {
   DesignParameterSchema,
+  FileAttachmentSchema,
   KbHitSchema,
   ValidationReportSchema
 } from '../../shared/protocol'
 import type {
   DesignParameter,
   EntityReference,
+  FileAttachment,
   GenerationRecordView,
   HistoryMessage,
   HistorySessionSummary,
@@ -23,6 +25,7 @@ interface SessionRow {
   title: string
   drawing_path: string | null
   drawing_name: string | null
+  project_root: string | null
   created_at: number
   updated_at: number
   message_count: number
@@ -35,6 +38,7 @@ interface MessageRow {
   text: string
   sources_json: string | null
   references_json: string | null
+  attachments_json: string | null
   error: string | null
   created_at: number
 }
@@ -55,6 +59,7 @@ export interface CreateSessionInput {
   title: string
   drawingPath?: string | null
   drawingName?: string | null
+  projectRoot?: string | null
 }
 
 export interface AppendMessageInput {
@@ -62,6 +67,7 @@ export interface AppendMessageInput {
   text: string
   sources?: KbHit[]
   references?: EntityReference[]
+  attachments?: FileAttachment[]
   error?: string
 }
 
@@ -89,9 +95,17 @@ export class HistoryStore {
     const now = this.now()
     this.db
       .prepare(
-        'INSERT INTO sessions (id, title, drawing_path, drawing_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO sessions (id, title, drawing_path, drawing_name, project_root, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(id, input.title, input.drawingPath ?? null, input.drawingName ?? null, now, now)
+      .run(
+        id,
+        input.title,
+        input.drawingPath ?? null,
+        input.drawingName ?? null,
+        input.projectRoot ?? null,
+        now,
+        now
+      )
     return this.summary(id) as HistorySessionSummary
   }
 
@@ -109,7 +123,7 @@ export class HistoryStore {
     }
     const messages = this.db
       .prepare(
-        'SELECT id, role, text, sources_json, references_json, error, created_at FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC'
+        'SELECT id, role, text, sources_json, references_json, attachments_json, error, created_at FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC'
       )
       .all(sessionId) as unknown as MessageRow[]
     const generations = this.db
@@ -131,9 +145,12 @@ export class HistoryStore {
     }
     const id = randomUUID()
     const createdAt = this.now()
+    const attachmentsJson = input.attachments?.length
+      ? JSON.stringify(input.attachments)
+      : null
     this.db
       .prepare(
-        'INSERT INTO messages (id, session_id, role, text, sources_json, references_json, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO messages (id, session_id, role, text, sources_json, references_json, attachments_json, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
       .run(
         id,
@@ -142,6 +159,7 @@ export class HistoryStore {
         input.text,
         input.sources?.length ? JSON.stringify(input.sources) : null,
         input.references?.length ? JSON.stringify(input.references) : null,
+        attachmentsJson,
         input.error ?? null,
         createdAt
       )
@@ -152,6 +170,7 @@ export class HistoryStore {
       text: input.text,
       sources_json: input.sources?.length ? JSON.stringify(input.sources) : null,
       references_json: input.references?.length ? JSON.stringify(input.references) : null,
+      attachments_json: attachmentsJson,
       error: input.error ?? null,
       created_at: createdAt
     })
@@ -167,6 +186,15 @@ export class HistoryStore {
     this.db
       .prepare('UPDATE sessions SET drawing_path = ?, drawing_name = ?, updated_at = ? WHERE id = ?')
       .run(drawing?.path ?? null, drawing?.name ?? null, this.now(), sessionId)
+  }
+
+  updateProjectRoot(sessionId: string, projectRoot: string | null): void {
+    if (!this.exists(sessionId)) {
+      return
+    }
+    this.db
+      .prepare('UPDATE sessions SET project_root = ?, updated_at = ? WHERE id = ?')
+      .run(projectRoot, this.now(), sessionId)
   }
 
   addGeneration(
@@ -236,44 +264,51 @@ export class HistoryStore {
     const row = this.db.prepare('PRAGMA user_version').get() as
       | { user_version?: number }
       | undefined
-    if ((row?.user_version ?? 0) >= 2) {
-      return
+    const version = row?.user_version ?? 0
+    if (version < 2) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS sessions (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          drawing_path TEXT,
+          drawing_name TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS messages (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+          text TEXT NOT NULL,
+          sources_json TEXT,
+          references_json TEXT,
+          error TEXT,
+          created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS generations (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          parameters_json TEXT NOT NULL,
+          validation_json TEXT,
+          file_path TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id, created_at);
+        CREATE INDEX IF NOT EXISTS generations_session ON generations(session_id, created_at);
+        PRAGMA user_version = 2;
+      `)
     }
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        drawing_path TEXT,
-        drawing_name TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-        role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-        text TEXT NOT NULL,
-        sources_json TEXT,
-        references_json TEXT,
-        error TEXT,
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS generations (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-        parameters_json TEXT NOT NULL,
-        validation_json TEXT,
-        file_path TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS meta (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id, created_at);
-      CREATE INDEX IF NOT EXISTS generations_session ON generations(session_id, created_at);
-      PRAGMA user_version = 2;
-    `)
+    if (version < 3) {
+      this.db.exec(`
+        ALTER TABLE sessions ADD COLUMN project_root TEXT;
+        ALTER TABLE messages ADD COLUMN attachments_json TEXT;
+        PRAGMA user_version = 3;
+      `)
+    }
   }
 
   private exists(sessionId: string): boolean {
@@ -294,7 +329,7 @@ export class HistoryStore {
 
 function sessionSelect(): string {
   return `
-    SELECT s.id, s.title, s.drawing_path, s.drawing_name, s.created_at, s.updated_at,
+    SELECT s.id, s.title, s.drawing_path, s.drawing_name, s.project_root, s.created_at, s.updated_at,
       (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count,
       (SELECT COUNT(*) FROM generations g WHERE g.session_id = s.id) AS generation_count
     FROM sessions s
@@ -307,6 +342,7 @@ function toSummary(row: SessionRow): HistorySessionSummary {
     title: row.title,
     drawingPath: row.drawing_path,
     drawingName: row.drawing_name,
+    projectRoot: row.project_root,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     messageCount: Number(row.message_count),
@@ -323,6 +359,9 @@ function toMessage(row: MessageRow): HistoryMessage {
     ...(parseSources(row.sources_json) ? { sources: parseSources(row.sources_json) } : {}),
     ...(parseReferences(row.references_json)
       ? { references: parseReferences(row.references_json) }
+      : {}),
+    ...(parseAttachments(row.attachments_json)
+      ? { attachments: parseAttachments(row.attachments_json) }
       : {}),
     ...(row.error ? { error: row.error } : {})
   }
@@ -360,6 +399,18 @@ function parseReferences(raw: string | null): EntityReference[] | undefined {
     return Array.isArray(parsed) && parsed.length > 0
       ? (parsed as EntityReference[])
       : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function parseAttachments(raw: string | null): FileAttachment[] | undefined {
+  if (!raw) {
+    return undefined
+  }
+  try {
+    const parsed = FileAttachmentSchema.array().safeParse(JSON.parse(raw))
+    return parsed.success && parsed.data.length > 0 ? parsed.data : undefined
   } catch {
     return undefined
   }

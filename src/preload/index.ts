@@ -28,6 +28,11 @@ import type {
   LayerEntitiesResult,
   ModelProvider,
   ModelSettingsSave,
+  ProjectCloseOutcome,
+  ProjectInfo,
+  ProjectOpenOutcome,
+  ProjectPickFilesOutcome,
+  ProjectVerifyFilesOutcome,
   PublicModelSettings,
   SettingsSaveResult,
   SidecarStatus
@@ -63,6 +68,14 @@ contextBridge.exposeInMainWorld('cad', {
         ipcRenderer.removeListener('drawing:phase', listener)
       }
     }
+  },
+  project: {
+    open: (): Promise<ProjectOpenOutcome> => ipcRenderer.invoke('project:open'),
+    current: (): Promise<ProjectInfo | null> => ipcRenderer.invoke('project:current'),
+    close: (): Promise<ProjectCloseOutcome> => ipcRenderer.invoke('project:close'),
+    pickFiles: (): Promise<ProjectPickFilesOutcome> => ipcRenderer.invoke('project:pick-files'),
+    verifyFiles: (paths: string[]): Promise<ProjectVerifyFilesOutcome> =>
+      ipcRenderer.invoke('project:verify-files', paths)
   },
   settings: {
     get: (): Promise<PublicModelSettings> => ipcRenderer.invoke('settings:get'),

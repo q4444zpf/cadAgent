@@ -5,7 +5,9 @@ import {
   type Drawing,
   type DrawingOpenResult,
   type DrawingPhaseEvent,
+  type HistorySessionOutcome,
   type HistorySessionView,
+  type ProjectInfo,
   type SidecarStatus
 } from '../../shared/protocol'
 import { DrawingCanvas } from './drawing/DrawingCanvas'
@@ -42,9 +44,33 @@ export default function App() {
   const [converter, setConverter] = useState<ConverterStatus | null>(null)
   const [converterDismissed, setConverterDismissed] = useState(false)
   const [phase, setPhase] = useState<DrawingPhaseEvent | null>(null)
+  const [project, setProject] = useState<ProjectInfo | null>(null)
+  const [projectBusy, setProjectBusy] = useState(false)
+  const [projectError, setProjectError] = useState<string | null>(null)
+  const [projectUnavailable, setProjectUnavailable] = useState(false)
 
   useEffect(() => {
     return window.cad.drawing.onPhase(setPhase)
+  }, [])
+
+  useEffect(() => {
+    let mounted = true
+    void (async () => {
+      const session = await window.cad.history.current().catch(() => null)
+      if (!mounted) {
+        return
+      }
+      if (session?.session) {
+        setProjectUnavailable(Boolean(session.projectUnavailable))
+      }
+      const current = await window.cad.project.current().catch(() => null)
+      if (mounted) {
+        setProject(current)
+      }
+    })()
+    return () => {
+      mounted = false
+    }
   }, [])
 
   useEffect(() => {
@@ -155,6 +181,45 @@ export default function App() {
     }
   }
 
+  async function openProject(): Promise<void> {
+    setProjectBusy(true)
+    setProjectError(null)
+    try {
+      const outcome = await window.cad.project.open()
+      if (outcome.canceled) {
+        return
+      }
+      if (!outcome.ok || !outcome.project) {
+        setProjectError(outcome.error ?? '无法打开项目文件夹')
+        return
+      }
+      setProject(outcome.project)
+      setProjectUnavailable(false)
+    } catch (failure) {
+      setProjectError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setProjectBusy(false)
+    }
+  }
+
+  async function closeProject(): Promise<void> {
+    setProjectBusy(true)
+    setProjectError(null)
+    try {
+      const outcome = await window.cad.project.close()
+      if (!outcome.ok) {
+        setProjectError(outcome.error ?? '无法关闭项目')
+        return
+      }
+      setProject(null)
+      setProjectUnavailable(false)
+    } catch (failure) {
+      setProjectError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setProjectBusy(false)
+    }
+  }
+
   async function openFile(): Promise<void> {
     setOpening(true)
     setPhase(null)
@@ -198,9 +263,14 @@ export default function App() {
     })
   }
 
-  async function openHistorySession(session: HistorySessionView): Promise<void> {
+  async function openHistorySession(
+    session: HistorySessionView,
+    outcome: HistorySessionOutcome
+  ): Promise<void> {
     setView('drawing')
     setHistorySignal((current) => current + 1)
+    setProject(await window.cad.project.current().catch(() => null))
+    setProjectUnavailable(Boolean(outcome.projectUnavailable))
     if (session.drawingPath && session.drawingPath !== drawing?.path) {
       await loadPath(session.drawingPath)
     }
@@ -309,11 +379,51 @@ export default function App() {
         </main>
       ) : view === 'history' ? (
         <main className="app__main app__main--settings">
-          <HistoryView onOpen={(session) => void openHistorySession(session)} />
+          <HistoryView
+            onOpen={(session, outcome) => void openHistorySession(session, outcome)}
+          />
         </main>
       ) : (
         <main className="app__main">
         <aside className="sidebar">
+          <section className="panel">
+            <div className="panel__heading">
+              <h2>项目</h2>
+              <div className="panel__tools">
+                <button type="button" onClick={() => void openProject()} disabled={projectBusy}>
+                  {projectBusy ? '处理中…' : project ? '更换项目…' : '打开项目…'}
+                </button>
+                {project ? (
+                  <button type="button" onClick={() => void closeProject()} disabled={projectBusy}>
+                    关闭项目
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            {project ? (
+              <dl className="facts">
+                <div>
+                  <dt>名称</dt>
+                  <dd title={project.root}>{project.name}</dd>
+                </div>
+                <div>
+                  <dt>路径</dt>
+                  <dd className="project__root" title={project.root}>
+                    {project.root}
+                  </dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="muted">
+                打开本地文件夹作为项目，可扫描其中的文件与压缩包，并在对话中附加文件。文件不会被上传或复制。
+              </p>
+            )}
+            {projectUnavailable ? (
+              <p className="error">原会话的项目路径不可用，请重新打开项目文件夹。</p>
+            ) : null}
+            {projectError ? <p className="error">{projectError}</p> : null}
+          </section>
+
           <section className="panel">
             <h2>图纸文件</h2>
             {drawing ? (
@@ -510,6 +620,7 @@ export default function App() {
         </section>
 
         <ChatPanel
+          project={project}
           drawingName={drawing?.name ?? null}
           drawingPath={drawing?.path ?? null}
           highlighted={highlight}

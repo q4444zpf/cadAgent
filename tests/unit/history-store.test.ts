@@ -1,9 +1,15 @@
 import { existsSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import { HistoryStore } from '../../src/node/history/store'
-import type { DesignParameter, EntityReference, KbHit } from '../../src/shared/protocol'
+import type {
+  DesignParameter,
+  EntityReference,
+  FileAttachment,
+  KbHit
+} from '../../src/shared/protocol'
 
 const HIT: KbHit = {
   docId: 'doc-notes',
@@ -27,6 +33,13 @@ const PARAMETER: DesignParameter = {
   unit: 'mm',
   basis: 'spec.pdf·第 2 页',
   assumed: false
+}
+
+const ATTACHMENT: FileAttachment = {
+  path: '图纸/a.dxf',
+  name: 'a.dxf',
+  kind: 'drawing',
+  size: 2048
 }
 
 const dirs: string[] = []
@@ -151,5 +164,92 @@ describe('HistoryStore', () => {
 
     expect(store.getSession('missing')).toBeNull()
     expect(store.deleteSession('missing')).toBe(false)
+  })
+
+  it('persists the project root and clears it on request', () => {
+    const path = databasePath()
+    let store = open(path)
+    const session = store.createSession({
+      title: '项目会话',
+      projectRoot: 'F:/工程/某项目'
+    })
+    expect(session.projectRoot).toBe('F:/工程/某项目')
+
+    store.updateProjectRoot(session.id, null)
+    expect(store.getSession(session.id)?.projectRoot).toBeNull()
+
+    store.updateProjectRoot(session.id, 'F:/工程/另一个项目')
+    store.close()
+    stores.splice(stores.indexOf(store), 1)
+
+    store = open(path)
+    expect(store.getSession(session.id)?.projectRoot).toBe('F:/工程/另一个项目')
+  })
+
+  it('persists message attachments across reopen', () => {
+    const path = databasePath()
+    let store = open(path)
+    const session = store.createSession({ title: '附件会话' })
+    store.appendMessage(session.id, {
+      role: 'user',
+      text: '对比说明和图纸',
+      attachments: [ATTACHMENT]
+    })
+    store.close()
+    stores.splice(stores.indexOf(store), 1)
+
+    store = open(path)
+    expect(store.getSession(session.id)?.messages[0].attachments).toEqual([ATTACHMENT])
+  })
+
+  it('upgrades a version 2 database without losing sessions', () => {
+    const path = databasePath()
+    const legacy = new DatabaseSync(path)
+    legacy.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        drawing_path TEXT,
+        drawing_name TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+        text TEXT NOT NULL,
+        sources_json TEXT,
+        references_json TEXT,
+        error TEXT,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE generations (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        parameters_json TEXT NOT NULL,
+        validation_json TEXT,
+        file_path TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      INSERT INTO sessions (id, title, created_at, updated_at)
+        VALUES ('legacy', '旧会话', 1, 1);
+      INSERT INTO messages (id, session_id, role, text, created_at)
+        VALUES ('m1', 'legacy', 'user', '旧消息', 2);
+      PRAGMA user_version = 2;
+    `)
+    legacy.close()
+
+    const store = open(path)
+    const restored = store.getSession('legacy')
+
+    expect(restored?.title).toBe('旧会话')
+    expect(restored?.projectRoot).toBeNull()
+    expect(restored?.messages[0].text).toBe('旧消息')
+    expect(restored?.messages[0].attachments).toBeUndefined()
   })
 })

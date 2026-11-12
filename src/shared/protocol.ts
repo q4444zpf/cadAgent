@@ -157,6 +157,89 @@ export interface LayerEntitiesResult {
   error?: string
 }
 
+export const FileAttachmentSchema = z.object({
+  path: z.string().min(1),
+  name: z.string().min(1),
+  kind: z.enum(['drawing', 'archive', 'document', 'text', 'image', 'other']),
+  size: z.number().int().nonnegative()
+})
+
+export type FileAttachment = z.infer<typeof FileAttachmentSchema>
+
+export const ProjectEntrySchema = z.object({
+  name: z.string(),
+  path: z.string(),
+  type: z.enum(['file', 'dir', 'archive', 'symlink']),
+  size: z.number().int().nonnegative(),
+  mtimeMs: z.number().int().nonnegative(),
+  extension: z.string().optional(),
+  format: z.string().optional()
+})
+
+export type ProjectEntry = z.infer<typeof ProjectEntrySchema>
+
+export const ProjectScanSchema = z.object({
+  path: z.string(),
+  entries: z.array(ProjectEntrySchema),
+  totals: z.object({
+    files: z.number().int().nonnegative(),
+    dirs: z.number().int().nonnegative(),
+    archives: z.number().int().nonnegative()
+  }),
+  byExtension: z.record(z.string(), z.number().int().nonnegative()),
+  truncated: z.boolean(),
+  ignored: z.array(z.string()),
+  warnings: z.array(z.string())
+})
+
+export type ProjectScanResult = z.infer<typeof ProjectScanSchema>
+
+export const ArchiveEntrySchema = z.object({
+  name: z.string(),
+  size: z.number().int().nonnegative(),
+  compressedSize: z.number().int().nonnegative().nullable(),
+  isDir: z.boolean(),
+  isLink: z.boolean(),
+  modifiedAt: z.number().int().nullable()
+})
+
+export type ArchiveEntry = z.infer<typeof ArchiveEntrySchema>
+
+export const ArchiveListSchema = z.object({
+  path: z.string(),
+  format: z.string(),
+  entryCount: z.number().int().nonnegative(),
+  totalUncompressedBytes: z.number().int().nonnegative(),
+  entries: z.array(ArchiveEntrySchema),
+  truncated: z.boolean()
+})
+
+export type ArchiveListResult = z.infer<typeof ArchiveListSchema>
+
+export const ArchiveExtractSchema = z.object({
+  path: z.string(),
+  target: z.string(),
+  filesExtracted: z.number().int().nonnegative(),
+  directoriesCreated: z.number().int().nonnegative(),
+  bytesExtracted: z.number().int().nonnegative()
+})
+
+export type ArchiveExtractResult = z.infer<typeof ArchiveExtractSchema>
+
+export const FileReadSchema = z.object({
+  path: z.string(),
+  kind: z.enum(['dxf', 'pdf', 'docx', 'text', 'image']),
+  size: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+  encoding: z.string().nullable(),
+  content: z.string().optional(),
+  pages: z.number().int().nonnegative().optional(),
+  paragraphs: z.number().int().nonnegative().optional(),
+  summary: DrawingSchema.optional()
+})
+
+export type FileReadResult = z.infer<typeof FileReadSchema>
+
 export const ModelSettingsSchema = z.object({
   provider: z.string().min(1),
   model: z.string().min(1),
@@ -205,7 +288,8 @@ export type ConnectionTestResult = z.infer<typeof ConnectionTestResultSchema>
 
 export const AgentAskSchema = z.object({
   requestId: z.string().min(1),
-  prompt: z.string().trim().min(1).max(4000)
+  prompt: z.string().trim().min(1).max(4000),
+  attachments: z.array(FileAttachmentSchema).max(10).optional()
 })
 
 export type AgentAsk = z.infer<typeof AgentAskSchema>
@@ -402,6 +486,36 @@ export interface DesignActionOutcome {
   error?: string
 }
 
+export interface ProjectInfo {
+  root: string
+  name: string
+}
+
+export interface ProjectOpenOutcome {
+  ok: boolean
+  project?: ProjectInfo
+  canceled?: boolean
+  error?: string
+}
+
+export interface ProjectPickFilesOutcome {
+  ok: boolean
+  files?: FileAttachment[]
+  canceled?: boolean
+  error?: string
+}
+
+export interface ProjectCloseOutcome {
+  ok: boolean
+  error?: string
+}
+
+export interface ProjectVerifyFilesOutcome {
+  ok: boolean
+  missing?: string[]
+  error?: string
+}
+
 export interface HistoryMessage {
   id: string
   role: 'user' | 'assistant'
@@ -409,6 +523,7 @@ export interface HistoryMessage {
   createdAt: number
   sources?: KbHit[]
   references?: EntityReference[]
+  attachments?: FileAttachment[]
   error?: string
 }
 
@@ -417,6 +532,7 @@ export interface HistorySessionSummary {
   title: string
   drawingPath: string | null
   drawingName: string | null
+  projectRoot: string | null
   createdAt: number
   updatedAt: number
   messageCount: number
@@ -453,6 +569,7 @@ export interface HistoryListOutcome {
 export interface HistorySessionOutcome {
   ok: boolean
   session?: HistorySessionView
+  projectUnavailable?: boolean
   error?: string
 }
 

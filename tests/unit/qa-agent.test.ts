@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { createProjectTools } from '../../src/node/agent/project-tools'
 import { QaAgent } from '../../src/node/agent/qa-agent'
 import { ModelRuntime } from '../../src/node/model/runtime'
 import type { StoredModelSettings } from '../../src/node/model/settings'
+import type { SidecarClient } from '../../src/node/sidecar/client'
 import type { AgentStreamEvent, Drawing, KbHit } from '../../src/shared/protocol'
 
 function fixture(): Drawing {
@@ -261,4 +263,94 @@ describe('QaAgent', () => {
     expect(end).toMatchObject({ type: 'run_end', aborted: false })
     expect((end as { sources?: unknown }).sources).toBeUndefined()
   })
+
+  it('runs project tools in fake mode even without an open drawing', async () => {
+    const settings: StoredModelSettings = {
+      provider: 'deepseek',
+      model: 'deepseek-flash',
+      fakeMode: true,
+      apiKey: null
+    }
+    const calls: string[] = []
+    const sidecar = {
+      scanProject: async () => {
+        calls.push('scan')
+        return {
+          path: '.',
+          entries: [
+            { name: '图纸', path: '图纸', type: 'dir', size: 0, mtimeMs: 0 },
+            { name: '说明.pdf', path: '说明.pdf', type: 'file', size: 10, mtimeMs: 0 }
+          ],
+          totals: { files: 5, dirs: 1, archives: 1 },
+          byExtension: { pdf: 1 },
+          truncated: false,
+          ignored: [],
+          warnings: []
+        }
+      },
+      extractArchive: async (_root: string, path: string) => {
+        calls.push(`extract:${path}`)
+        return {
+          path,
+          target: '归档_解压',
+          filesExtracted: 3,
+          directoriesCreated: 1,
+          bytesExtracted: 100
+        }
+      },
+      readFile: async (_root: string, path: string) => {
+        calls.push(`read:${path}`)
+        return {
+          path,
+          kind: 'pdf',
+          size: 10,
+          truncated: false,
+          encoding: null,
+          content: '第 1 页\n净宽 600'
+        }
+      }
+    } as unknown as SidecarClient
+    const agent = new QaAgent({
+      models: new ModelRuntime(() => settings),
+      getSettings: () => settings,
+      getDrawing: () => null,
+      createProjectTools: () =>
+        createProjectTools({
+          getRoot: () => 'F:/proj',
+          sidecar,
+          openDrawing: async () => ({
+            ok: false,
+            error: { code: 'unused', message: 'unused' }
+          })
+        })
+    })
+
+    const scanned = await collect(agent, '项目里有哪些文件？')
+    const extracted = await collect(agent, '把 归档.zip 解压到项目里')
+    const read = await collect(agent, '读取项目里的 说明.pdf 内容')
+
+    expect(scanned.tools).toEqual(['scan_project'])
+    expect(scanned.text).toContain('5 个文件')
+    expect(extracted.tools).toEqual(['extract_archive'])
+    expect(extracted.text).toContain('归档_解压')
+    expect(read.tools).toEqual(['read_file'])
+    expect(read.text).toContain('净宽 600')
+    expect(calls).toEqual(['scan', 'extract:归档.zip', 'read:说明.pdf'])
+  })
 })
+
+async function collect(
+  agent: QaAgent,
+  prompt: string
+): Promise<{ text: string; tools: string[] }> {
+  const events: AgentStreamEvent[] = []
+  const result = await agent.ask({ requestId: `req-${prompt}`, prompt }, (event) =>
+    events.push(event)
+  )
+  return {
+    text: result.text,
+    tools: events
+      .filter((event) => event.type === 'tool_start')
+      .map((event) => (event.type === 'tool_start' ? event.name : ''))
+  }
+}

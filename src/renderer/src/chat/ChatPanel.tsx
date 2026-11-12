@@ -4,9 +4,13 @@ import { isLowConfidence } from '../../../shared/protocol'
 import type {
   AgentStreamEvent,
   EntityReference,
+  FileAttachment,
   HistoryMessage,
-  KbHit
+  KbHit,
+  ProjectInfo
 } from '../../../shared/protocol'
+
+const MAX_ATTACHMENTS = 10
 
 interface ToolActivity {
   callId: string
@@ -27,9 +31,11 @@ interface ChatEntry {
   tools: ToolActivity[]
   references: EntityReference[]
   sources: KbHit[]
+  attachments?: FileAttachment[]
 }
 
 interface ChatPanelProps {
+  project: ProjectInfo | null
   drawingName: string | null
   drawingPath: string | null
   highlighted: ReadonlySet<string>
@@ -47,6 +53,7 @@ const KIND_LABELS: Record<string, string> = {
 }
 
 export function ChatPanel({
+  project,
   drawingName,
   drawingPath,
   highlighted,
@@ -59,6 +66,9 @@ export function ChatPanel({
   const [activeId, setActiveId] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [sessionTitle, setSessionTitle] = useState<string | null>(null)
+  const [attachments, setAttachments] = useState<FileAttachment[]>([])
+  const [picking, setPicking] = useState(false)
+  const [missingPaths, setMissingPaths] = useState<ReadonlySet<string>>(new Set())
   const listRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -77,6 +87,7 @@ export function ChatPanel({
     setInput('')
     setNotice(null)
     setSessionTitle(null)
+    setAttachments([])
     void window.cad.agent.abort()
     void window.cad.history.current().then((outcome) => {
       if (!mounted || !outcome.ok || !outcome.session) {
@@ -97,6 +108,75 @@ export function ChatPanel({
     }
   }, [entries])
 
+  useEffect(() => {
+    if (!project) {
+      setAttachments([])
+    }
+  }, [project])
+
+  const attachmentPaths = entries
+    .flatMap((entry) => entry.attachments?.map((file) => file.path) ?? [])
+    .join('\n')
+
+  useEffect(() => {
+    if (!project || !attachmentPaths) {
+      setMissingPaths(new Set())
+      return
+    }
+    let mounted = true
+    void window.cad.project
+      .verifyFiles(attachmentPaths.split('\n'))
+      .then((outcome) => {
+        if (mounted) {
+          setMissingPaths(new Set(outcome.ok ? (outcome.missing ?? []) : []))
+        }
+      })
+      .catch(() => {
+        if (mounted) {
+          setMissingPaths(new Set())
+        }
+      })
+    return () => {
+      mounted = false
+    }
+  }, [project, attachmentPaths])
+
+  async function pickFiles(): Promise<void> {
+    if (!project || picking) {
+      return
+    }
+    setPicking(true)
+    setNotice(null)
+    try {
+      const outcome = await window.cad.project.pickFiles()
+      if (outcome.canceled) {
+        return
+      }
+      if (!outcome.ok || !outcome.files) {
+        setNotice(outcome.error ?? '无法选择文件')
+        return
+      }
+      const picked = outcome.files
+      setAttachments((current) => {
+        const existing = new Set(current.map((file) => file.path))
+        const merged = [...current, ...picked.filter((file) => !existing.has(file.path))]
+        if (merged.length > MAX_ATTACHMENTS) {
+          setNotice(`一次最多附加 ${MAX_ATTACHMENTS} 个文件，已保留前 ${MAX_ATTACHMENTS} 个。`)
+          return merged.slice(0, MAX_ATTACHMENTS)
+        }
+        return merged
+      })
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error))
+    } finally {
+      setPicking(false)
+    }
+  }
+
+  function removeAttachment(path: string): void {
+    setAttachments((current) => current.filter((file) => file.path !== path))
+  }
+
   async function send(): Promise<void> {
     const prompt = input.trim()
     if (!prompt || activeId) {
@@ -104,7 +184,9 @@ export function ChatPanel({
     }
 
     const requestId = crypto.randomUUID()
+    const selected = attachments
     setInput('')
+    setAttachments([])
     setNotice(null)
     setEntries((current) => [
       ...current,
@@ -116,7 +198,8 @@ export function ChatPanel({
         aborted: false,
         tools: [],
         references: [],
-        sources: []
+        sources: [],
+        ...(selected.length ? { attachments: selected } : {})
       },
       {
         id: requestId,
@@ -132,7 +215,11 @@ export function ChatPanel({
     setActiveId(requestId)
 
     try {
-      const result = await window.cad.agent.ask({ requestId, prompt })
+      const result = await window.cad.agent.ask({
+        requestId,
+        prompt,
+        ...(selected.length ? { attachments: selected } : {})
+      })
       if (!result.ok) {
         failEntry(requestId, result.error ?? '问答失败')
       }
@@ -193,6 +280,9 @@ export function ChatPanel({
           entry.role === 'user' ? (
             <div key={entry.id} className="chat__bubble chat__bubble--user">
               {entry.text}
+              {entry.attachments && entry.attachments.length > 0 ? (
+                <AttachmentChips files={entry.attachments} missing={missingPaths} />
+              ) : null}
             </div>
           ) : (
             <div key={entry.id} className="chat__answer">
@@ -307,27 +397,63 @@ export function ChatPanel({
           void send()
         }}
       >
-        <textarea
-          rows={2}
-          value={input}
-          placeholder="就当前图纸提问…（Enter 发送，Shift+Enter 换行）"
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-              event.preventDefault()
-              void send()
-            }
-          }}
-        />
-        {activeId ? (
-          <button type="button" onClick={() => void window.cad.agent.abort()}>
-            停止
+        <div className="chat__composer-tools">
+          <button
+            type="button"
+            className="chat__attach"
+            onClick={() => void pickFiles()}
+            disabled={!project || picking}
+            title={project ? '选择项目内的文件作为上下文' : '请先打开项目文件夹'}
+          >
+            {picking ? '选择中…' : '选择文件'}
           </button>
-        ) : (
-          <button type="submit" className="button--primary" disabled={!input.trim()}>
-            发送
-          </button>
-        )}
+          <span className="muted chat__attach-hint">
+            {project ? '附件只传路径，不复制文件' : '打开项目后可附加文件'}
+          </span>
+        </div>
+
+        {attachments.length > 0 ? (
+          <div className="chat__attachments">
+            {attachments.map((file) => (
+              <span key={file.path} className="chat__attachment" title={file.path}>
+                <span className="chat__attachment-name">{file.name}</span>
+                <span className="chat__attachment-size">{formatSize(file.size)}</span>
+                <button
+                  type="button"
+                  className="chat__attachment-remove"
+                  aria-label={`移除 ${file.name}`}
+                  onClick={() => removeAttachment(file.path)}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="chat__composer-row">
+          <textarea
+            rows={2}
+            value={input}
+            placeholder="就当前图纸提问…（Enter 发送，Shift+Enter 换行）"
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault()
+                void send()
+              }
+            }}
+          />
+          {activeId ? (
+            <button type="button" onClick={() => void window.cad.agent.abort()}>
+              停止
+            </button>
+          ) : (
+            <button type="submit" className="button--primary" disabled={!input.trim()}>
+              发送
+            </button>
+          )}
+        </div>
       </form>
     </section>
   )
@@ -388,8 +514,46 @@ function messageToEntry(message: HistoryMessage): ChatEntry {
     error: message.error,
     tools: [],
     references: message.references ?? [],
-    sources: message.sources ?? []
+    sources: message.sources ?? [],
+    ...(message.attachments?.length ? { attachments: message.attachments } : {})
   }
+}
+
+function AttachmentChips({
+  files,
+  missing
+}: {
+  files: FileAttachment[]
+  missing: ReadonlySet<string>
+}) {
+  return (
+    <div className="chat__attachments">
+      {files.map((file) => {
+        const gone = missing.has(file.path)
+        return (
+          <span
+            key={file.path}
+            className={gone ? 'chat__attachment chat__attachment--missing' : 'chat__attachment'}
+            title={gone ? `${file.path}（文件已不存在）` : file.path}
+          >
+            <span className="chat__attachment-name">{file.name}</span>
+            <span className="chat__attachment-size">{formatSize(file.size)}</span>
+            {gone ? <span className="chat__attachment-gone">已不存在</span> : null}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function stringify(value: unknown): string {

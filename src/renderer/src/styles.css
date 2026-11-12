@@ -400,12 +400,21 @@ body {
 }
 
 .facts dt {
+  flex-shrink: 0;
   color: #6b7280;
 }
 
 .facts dd {
   margin: 0;
   font-variant-numeric: tabular-nums;
+}
+
+.project__root {
+  flex: 1;
+  min-width: 0;
+  margin-left: 12px;
+  text-align: right;
+  overflow-wrap: anywhere;
 }
 
 .muted {
@@ -731,8 +740,89 @@ button:disabled {
 
 .chat__composer {
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chat__composer-row {
+  display: flex;
   align-items: flex-end;
   gap: 8px;
+}
+
+.chat__composer-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat__attach {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.chat__attach-hint {
+  margin: 0;
+  font-size: 12px;
+}
+
+.chat__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chat__attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: #1e3a8a;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+}
+
+.chat__attachment-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat__attachment-size {
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat__attachment-remove {
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1;
+  color: #6b7280;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.chat__attachment-remove:hover {
+  color: #b91c1c;
+}
+
+.chat__attachment--missing {
+  color: #9ca3af;
+  background: #f3f4f6;
+  border-color: #e5e7eb;
+}
+
+.chat__attachment-gone {
+  padding: 0 5px;
+  font-size: 11px;
+  color: #6b7280;
+  background: #e5e7eb;
+  border-radius: 999px;
 }
 
 .chat__composer textarea {
